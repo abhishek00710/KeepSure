@@ -1,0 +1,254 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Bucket
+   uuid = "EEBD2A61-CE65-41C6-A628-431A87CD180F"
+   type = "1"
+   version = "2.0">
+   <Breakpoints>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "0716A769-828B-4A1F-9AFC-4572E8E8D319"
+            shouldBeEnabled = "Yes"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "KeepSure/App/AppLaunchExperience.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "63"
+            endingLineNumber = "63"
+            landmarkName = "shouldOfferGmailPrompt"
+            landmarkType = "24">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "13E69356-B41A-4B84-B9F6-FEF6E270B086"
+            shouldBeEnabled = "Yes"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "KeepSure/Models/GmailSync.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "294"
+            endingLineNumber = "294"
+            landmarkName = "bundledClientID()"
+            landmarkType = "7">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "DCD73451-8EE0-4B4F-999F-DEA82849D79C"
+            shouldBeEnabled = "Yes"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "KeepSure/Models/GmailSync.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "280"
+            endingLineNumber = "280"
+            landmarkName = "resolveClientID(defaults:)"
+            landmarkType = "7">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "3AE92DED-8DEA-428B-917B-AAD94BCDAE50"
+            shouldBeEnabled = "Yes"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "KeepSure/Models/GmailSync.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "285"
+            endingLineNumber = "285"
+            landmarkName = "resolveClientID(defaults:)"
+            landmarkType = "7">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "520EA1E1-0455-40F1-B41A-FFD11DC244A7"
+            shouldBeEnabled = "Yes"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "KeepSure/Models/GmailSync.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "281"
+            endingLineNumber = "281"
+            landmarkName = "resolveClientID(defaults:)"
+            landmarkType = "7">
+            <Locations>
+               <Location
+                  uuid = "520EA1E1-0455-40F1-B41A-FFD11DC244A7 - 96abf2f639c5cfd9"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "static KeepSure.EmailSyncManager.resolveClientID(defaults: __C.NSUserDefaults) -&gt; Swift.String"
+                  moduleName = "KeepSure.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/abhishekgangdeb/Documents/Ok/KeepSure/KeepSure/Models/GmailSync.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "281"
+                  endingLineNumber = "281">
+               </Location>
+               <Location
+                  uuid = "520EA1E1-0455-40F1-B41A-FFD11DC244A7 - 96abf2f639c5cfd9"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "static KeepSure.EmailSyncManager.resolveClientID(defaults: __C.NSUserDefaults) -&gt; Swift.String"
+                  moduleName = "KeepSure.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/abhishekgangdeb/Documents/Ok/KeepSure/KeepSure/Models/GmailSync.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "281"
+                  endingLineNumber = "281">
+               </Location>
+            </Locations>
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "6F1533CD-B440-4D40-A00E-D388BCB13133"
+            shouldBeEnabled = "No"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "KeepSure/Models/GmailSync.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "163"
+            endingLineNumber = "163"
+            landmarkName = "syncInbox()"
+            landmarkType = "7">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "608E6DFB-72A3-4236-8876-C8B8AD6F5360"
+            shouldBeEnabled = "Yes"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "KeepSure/Models/GmailSync.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "169"
+            endingLineNumber = "169"
+            landmarkName = "syncInbox()"
+            landmarkType = "7">
+            <Locations>
+               <Location
+                  uuid = "608E6DFB-72A3-4236-8876-C8B8AD6F5360 - ddcd420cb0f4c314"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "(3) await resume partial function for KeepSure.EmailSyncManager.syncInbox() async -&gt; ()"
+                  moduleName = "KeepSure.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/abhishekgangdeb/Documents/Ok/KeepSure/KeepSure/Models/GmailSync.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "169"
+                  endingLineNumber = "169">
+               </Location>
+               <Location
+                  uuid = "608E6DFB-72A3-4236-8876-C8B8AD6F5360 - 6031d975d1067615"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "(4) await resume partial function for KeepSure.EmailSyncManager.syncInbox() async -&gt; ()"
+                  moduleName = "KeepSure.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/abhishekgangdeb/Documents/Ok/KeepSure/KeepSure/Models/GmailSync.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "169"
+                  endingLineNumber = "169">
+               </Location>
+               <Location
+                  uuid = "608E6DFB-72A3-4236-8876-C8B8AD6F5360 - 5ffb51f456735c27"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "(8) suspend resume partial function for KeepSure.EmailSyncManager.syncInbox() async -&gt; ()"
+                  moduleName = "KeepSure.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/abhishekgangdeb/Documents/Ok/KeepSure/KeepSure/Models/GmailSync.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "169"
+                  endingLineNumber = "169">
+               </Location>
+            </Locations>
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "03CE0B3C-7334-4627-9528-88688534A6EE"
+            shouldBeEnabled = "Yes"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "KeepSure/Models/GmailSync.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "177"
+            endingLineNumber = "177"
+            landmarkName = "syncInbox()"
+            landmarkType = "7">
+            <Locations>
+               <Location
+                  uuid = "03CE0B3C-7334-4627-9528-88688534A6EE - 26e6e4381f29f11d"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "(6) suspend resume partial function for KeepSure.EmailSyncManager.syncInbox() async -&gt; ()"
+                  moduleName = "KeepSure.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/abhishekgangdeb/Documents/Ok/KeepSure/KeepSure/Models/GmailSync.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "177"
+                  endingLineNumber = "177">
+               </Location>
+               <Location
+                  uuid = "03CE0B3C-7334-4627-9528-88688534A6EE - da612eda7a8c281e"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "(7) suspend resume partial function for KeepSure.EmailSyncManager.syncInbox() async -&gt; ()"
+                  moduleName = "KeepSure.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/abhishekgangdeb/Documents/Ok/KeepSure/KeepSure/Models/GmailSync.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "177"
+                  endingLineNumber = "177">
+               </Location>
+               <Location
+                  uuid = "03CE0B3C-7334-4627-9528-88688534A6EE - 5ffb51f456735f1f"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "(8) suspend resume partial function for KeepSure.EmailSyncManager.syncInbox() async -&gt; ()"
+                  moduleName = "KeepSure.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/abhishekgangdeb/Documents/Ok/KeepSure/KeepSure/Models/GmailSync.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "177"
+                  endingLineNumber = "177">
+               </Location>
+            </Locations>
+         </BreakpointContent>
+      </BreakpointProxy>
+   </Breakpoints>
+</Bucket>
