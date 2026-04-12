@@ -36,22 +36,21 @@ The Gmail flow still depends on Google Cloud OAuth configuration, consent-screen
 
 ## Getting Started
 
-1. Open [KeepSure.xcodeproj](/Users/abhishekgangdeb/Documents/Ok/KeepSure/KeepSure.xcodeproj/project.pbxproj) in Xcode.
+1. Open `KeepSure.xcodeproj` in Xcode.
 2. Select your signing team and bundle settings if needed.
 3. If you want Gmail import to work, configure your Google OAuth client, consent screen, and test users.
 4. Build and run on a simulator or device.
 
 ## Repository Structure
 
-- [KeepSure/App](/Users/abhishekgangdeb/Documents/Ok/KeepSure/KeepSure/App)
-- [KeepSure/Models](/Users/abhishekgangdeb/Documents/Ok/KeepSure/KeepSure/Models)
-- [KeepSure/Persistence](/Users/abhishekgangdeb/Documents/Ok/KeepSure/KeepSure/Persistence)
-- [KeepSure/Views](/Users/abhishekgangdeb/Documents/Ok/KeepSure/KeepSure/Views)
-- [KeepSure/Resources](/Users/abhishekgangdeb/Documents/Ok/KeepSure/KeepSure/Resources)
-- [KeepSureTests](/Users/abhishekgangdeb/Documents/Ok/KeepSure/KeepSureTests)
-- [KeepSureUITests](/Users/abhishekgangdeb/Documents/Ok/KeepSure/KeepSureUITests)
+- `KeepSure/App` for app entry points, root navigation, and launch experience
+- `KeepSure/Models` for purchase records, Gmail sync, timelines, and receipt parsing
+- `KeepSure/Persistence` for the Core Data stack
+- `KeepSure/Views` for the SwiftUI interface
+- `KeepSure/Resources` for launch resources
+- `KeepSureTests` for unit tests
+- `KeepSureUITests` for UI tests
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](/Users/abhishekgangdeb/Documents/Ok/KeepSure/LICENSE).
-
+This project is licensed under the MIT License. See `LICENSE`.
