@@ -409,8 +409,8 @@ private struct GmailPermissionOnboardingView: View {
 }
 
 private struct LaunchExperienceView: View {
-    private let bgTop = Color(red: 0.93, green: 0.91, blue: 0.87)
-    private let bgBottom = Color(red: 0.84, green: 0.80, blue: 0.74)
+    private let bgTop = Color(red: 0.89, green: 0.85, blue: 0.79)
+    private let bgBottom = Color(red: 0.75, green: 0.69, blue: 0.61)
     private let text = Color(red: 0.21, green: 0.19, blue: 0.18)
     private let accent = Color(red: 0.70, green: 0.58, blue: 0.39)
     private let subtext = Color(red: 0.42, green: 0.36, blue: 0.30)
@@ -424,7 +424,7 @@ private struct LaunchExperienceView: View {
                 .ignoresSafeArea()
 
             Circle()
-                .fill(Color.white.opacity(0.58))
+                .fill(Color.white.opacity(0.45))
                 .frame(width: 260, height: 180)
                 .blur(radius: 18)
                 .offset(x: -70, y: -180)

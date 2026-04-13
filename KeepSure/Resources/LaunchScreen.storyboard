@@ -32,7 +32,7 @@
                             </label>
                         </subviews>
                         <viewLayoutGuide key="safeArea" id="Bcu-3y-fUS"/>
-                        <color key="backgroundColor" red="0.9294117647" green="0.9098039216" blue="0.8705882353" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                        <color key="backgroundColor" red="0.8509803922" green="0.8078431373" blue="0.7411764706" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
                         <constraints>
                             <constraint firstItem="nAs-bm-1Xk" firstAttribute="centerX" secondItem="Ze5-6b-2t3" secondAttribute="centerX" id="JPg-FP-d6T"/>
                             <constraint firstItem="nAs-bm-1Xk" firstAttribute="centerY" secondItem="Ze5-6b-2t3" secondAttribute="centerY" constant="-76" id="hGp-sv-HaX"/>

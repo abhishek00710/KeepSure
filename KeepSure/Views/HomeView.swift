@@ -287,7 +287,14 @@ struct HomeView: View {
 
     private var familySection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionTitle("Family snapshot")
+            HStack(alignment: .top, spacing: 14) {
+                Image(systemName: "sparkles.rectangle.stack.fill")
+                    .font(.title2)
+                    .foregroundStyle(AppTheme.accent)
+                    .frame(width: 42, height: 42)
+                    .background(AppTheme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                sectionTitle("Family snapshot")
+            }
             Text(familyHighlights)
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(AppTheme.ink)
@@ -300,28 +307,27 @@ struct HomeView: View {
     }
 
     private var suggestionCard: some View {
-        HStack(alignment: .top, spacing: 14) {
-            Image(systemName: "sparkles.rectangle.stack.fill")
-                .font(.title2)
-                .foregroundStyle(AppTheme.accent)
-                .frame(width: 42, height: 42)
-                .background(AppTheme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-            VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading) {
+            HStack(alignment: .top, spacing: 14) {
+                Image(systemName: "sparkles.rectangle.stack.fill")
+                    .font(.title2)
+                    .foregroundStyle(AppTheme.accent)
+                    .frame(width: 42, height: 42)
+                    .background(AppTheme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 Text("Smart suggestion")
                     .font(.headline.weight(.semibold))
                     .foregroundStyle(AppTheme.ink)
-                Text(
-                    hasProtectedItems
-                        ? "2 receipts need review. Confirm the extracted product names and return windows so your alerts stay accurate."
-                        : "Start with one receipt or Gmail sync and Keep Sure will quietly shape the rest into a calm, useful timeline."
-                )
-                    .font(.subheadline)
-                    .foregroundStyle(AppTheme.secondaryAccent.opacity(0.8))
             }
-
-            Spacer()
-        }
+            
+            Text(
+                hasProtectedItems
+                ? "2 receipts need review. Confirm the extracted product names and return windows so your alerts stay accurate."
+                : "Start with one receipt or Gmail sync and Keep Sure will quietly shape the rest into a calm, useful timeline."
+            )
+            .font(.subheadline)
+            .foregroundStyle(AppTheme.secondaryAccent.opacity(0.8))
+            
+        }.frame(maxWidth: .infinity, alignment: .init(horizontal: .leading, vertical: .center))
         .padding(20)
         .background(panelCard)
     }
