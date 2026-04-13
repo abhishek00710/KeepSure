@@ -29,58 +29,80 @@ final class PersistenceController {
 
         container.viewContext.automaticallyMergesChangesFromParent = true
         container.viewContext.mergePolicy = NSMergePolicy.mergeByPropertyObjectTrump
-
-        seedIfNeeded()
     }
 
-    private func seedIfNeeded() {
+    func ensureDemoDataIfNeeded() throws {
         let context = container.viewContext
         let request = PurchaseRecord.fetchRequest()
         request.fetchLimit = 1
 
-        do {
-            let existing = try context.count(for: request)
-            guard existing == 0 else { return }
+        let existing = try context.count(for: request)
+        guard existing == 0 else { return }
+        try seedDemoPurchases(in: context)
+    }
 
-            let now = Date()
-            let examples: [(String, String, String, String, Double, Int, Int, Int)] = [
-                ("Dyson Airwrap", "Sephora", "Beauty", "You", 599, -12, 30, 24),
-                ("Nintendo Switch OLED", "Target", "Electronics", "Aarav", 349, -6, 15, 12),
-                ("Patio String Lights", "Costco", "Home", "Maya", 119, -20, 90, 24),
-                ("Carry-on Suitcase", "Away", "Travel", "You", 275, -40, 100, 60)
-            ]
+    func resetToDemoMode() throws {
+        let context = container.viewContext
+        try clearAllPurchases(in: context)
+        try seedDemoPurchases(in: context)
+    }
 
-            for item in examples {
-                let purchase = PurchaseRecord(context: context)
-                let purchaseDate = Calendar.current.date(byAdding: .day, value: item.5, to: now) ?? now
-                let windows = PurchaseWindows.makeDeadlines(
-                    purchaseDate: purchaseDate,
-                    returnDays: item.6,
-                    warrantyMonths: item.7
-                )
+    func resetToLiveMode() throws {
+        try clearAllPurchases(in: container.viewContext)
+    }
 
-                purchase.id = UUID()
-                purchase.productName = item.0
-                purchase.merchantName = item.1
-                purchase.categoryName = item.2
-                purchase.familyOwner = item.3
-                purchase.price = item.4
-                purchase.purchaseDate = purchaseDate
-                purchase.returnDeadline = windows.returnDeadline
-                purchase.warrantyExpiration = windows.warrantyExpiration
-                purchase.sourceType = item.1 == "Target" ? "Email" : "Scan"
-                purchase.currencyCode = "USD"
-                purchase.notes = "Seeded sample purchase for the first dashboard experience."
-                purchase.createdAt = purchaseDate
-                purchase.isArchived = false
-                purchase.externalProvider = item.1 == "Target" ? "demo" : nil
-                purchase.externalRecordID = item.1 == "Target" ? UUID().uuidString : nil
-                purchase.lastSyncedAt = item.1 == "Target" ? .now : nil
-            }
+    private func clearAllPurchases(in context: NSManagedObjectContext) throws {
+        let request = PurchaseRecord.fetchRequest()
+        let purchases = try context.fetch(request)
 
+        for purchase in purchases {
+            context.delete(purchase)
+        }
+
+        if context.hasChanges {
             try context.save()
-        } catch {
-            assertionFailure("Failed to seed starter purchases: \(error.localizedDescription)")
+        }
+    }
+
+    private func seedDemoPurchases(in context: NSManagedObjectContext) throws {
+        let now = Date()
+        let examples: [(String, String, String, String, Double, Int, Int, Int)] = [
+            ("Dyson Airwrap", "Sephora", "Beauty", "You", 599, -12, 30, 24),
+            ("Nintendo Switch OLED", "Target", "Electronics", "Aarav", 349, -6, 15, 12),
+            ("Patio String Lights", "Costco", "Home", "Maya", 119, -20, 90, 24),
+            ("Carry-on Suitcase", "Away", "Travel", "You", 275, -40, 100, 60)
+        ]
+
+        for item in examples {
+            let purchase = PurchaseRecord(context: context)
+            let purchaseDate = Calendar.current.date(byAdding: .day, value: item.5, to: now) ?? now
+            let windows = PurchaseWindows.makeDeadlines(
+                purchaseDate: purchaseDate,
+                returnDays: item.6,
+                warrantyMonths: item.7
+            )
+
+            purchase.id = UUID()
+            purchase.productName = item.0
+            purchase.merchantName = item.1
+            purchase.categoryName = item.2
+            purchase.familyOwner = item.3
+            purchase.price = item.4
+            purchase.purchaseDate = purchaseDate
+            purchase.returnDeadline = windows.returnDeadline
+            purchase.warrantyExpiration = windows.warrantyExpiration
+            purchase.sourceType = item.1 == "Target" ? "Email" : "Scan"
+            purchase.currencyCode = "USD"
+            purchase.notes = "Seeded sample purchase for the first dashboard experience."
+            purchase.createdAt = purchaseDate
+            purchase.isArchived = false
+            purchase.externalProvider = item.1 == "Target" ? "demo" : nil
+            purchase.externalRecordID = item.1 == "Target" ? UUID().uuidString : nil
+            purchase.lastSyncedAt = item.1 == "Target" ? .now : nil
+        }
+
+        if context.hasChanges {
+            try context.save()
         }
     }
 

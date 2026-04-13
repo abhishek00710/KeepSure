@@ -4,6 +4,7 @@ import VisionKit
 
 struct CaptureView: View {
     @EnvironmentObject private var emailSyncManager: EmailSyncManager
+    @EnvironmentObject private var appModeManager: AppModeManager
     @Environment(\.managedObjectContext) private var viewContext
     @FetchRequest(fetchRequest: PurchaseRecord.recentFetchRequest, animation: .snappy)
     private var purchases: FetchedResults<PurchaseRecord>
@@ -13,6 +14,10 @@ struct CaptureView: View {
     @State private var reviewDraft: ReceiptDraft?
     @State private var latestDraftPreview: ReceiptDraft?
     @State private var scanErrorMessage: String?
+
+    private var hasPurchases: Bool {
+        !purchases.isEmpty
+    }
 
     var body: some View {
         ScrollView {
@@ -99,27 +104,46 @@ struct CaptureView: View {
                 .font(.system(size: 30, weight: .bold, design: .rounded))
                 .foregroundStyle(AppTheme.ink)
 
-            Text("Scan a receipt, let Keep Sure read the essentials, then review the return window and warranty before you save.")
+            Text(
+                hasPurchases
+                    ? "Scan a receipt, let Keep Sure read the essentials, then review the return window and warranty before you save."
+                    : "Your first receipt can become something you never have to remember alone. Scan it once, and Keep Sure will shape it into a calm timeline."
+            )
                 .font(.body.weight(.medium))
                 .foregroundStyle(AppTheme.secondaryAccent.opacity(0.8))
 
-            ZStack(alignment: .bottomLeading) {
+            ZStack {
                 RoundedRectangle(cornerRadius: 30, style: .continuous)
                     .fill(AppTheme.captureGradient)
-                    .frame(height: 290)
                     .overlay {
                         RoundedRectangle(cornerRadius: 30, style: .continuous)
                             .strokeBorder(Color.white.opacity(0.65), lineWidth: 1)
                     }
+                    .padding(4)
 
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .strokeBorder(AppTheme.secondaryAccent.opacity(0.16), style: StrokeStyle(lineWidth: 1, dash: [10, 10]))
-                    .padding(22)
+                    .fill(Color.white.opacity(0.12))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 24, style: .continuous)
+                            .strokeBorder(
+                                AppTheme.secondaryAccent.opacity(0.12),
+                                style: StrokeStyle(lineWidth: 1, dash: [8, 8])
+                            )
+                    }
+                    .padding(18)
 
-                VStack(alignment: .leading, spacing: 14) {
-                    Image(systemName: "viewfinder.circle.fill")
-                        .font(.system(size: 42, weight: .semibold))
-                        .foregroundStyle(AppTheme.secondaryAccent)
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(alignment: .top) {
+                        Image(systemName: "viewfinder.circle.fill")
+                            .font(.system(size: 42, weight: .semibold))
+                            .foregroundStyle(AppTheme.secondaryAccent)
+
+                        Spacer(minLength: 0)
+                    }
+
+                    if !hasPurchases {
+                        delightfulBadge(text: "Your first one is the hardest. We can hold the rest.")
+                    }
 
                     Text("Scan receipt")
                         .font(.title2.weight(.bold))
@@ -128,6 +152,7 @@ struct CaptureView: View {
                     Text("Open the camera, capture each page, and Keep Sure will prefill the review sheet for you.")
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(AppTheme.secondaryAccent.opacity(0.84))
+                        .fixedSize(horizontal: false, vertical: true)
 
                     Button(action: startScan) {
                         Text("Start scanning")
@@ -139,7 +164,9 @@ struct CaptureView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                .padding(28)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(.horizontal, 34)
+                .padding(.vertical, 34)
             }
         }
     }
@@ -151,13 +178,19 @@ struct CaptureView: View {
             HStack(spacing: 12) {
                 actionButton(title: "Import PDF", subtitle: "Available next", systemImage: "doc.fill", action: startScan)
                 actionButton(
-                    title: emailSyncManager.isConnected ? "Sync Gmail" : "Connect Gmail",
-                    subtitle: emailSyncManager.isConnected
-                        ? "Import recent purchase emails"
-                        : (emailSyncManager.hasUsableConfiguration ? "One-time permission, then automatic imports" : "Gmail sync is unavailable in this build"),
+                    title: appModeManager.selectedMode == .live
+                        ? (emailSyncManager.isConnected ? "Sync Gmail" : "Connect Gmail")
+                        : "Live mode only",
+                    subtitle: appModeManager.selectedMode == .live
+                        ? (emailSyncManager.isConnected
+                            ? "Import recent purchase emails"
+                            : (emailSyncManager.hasUsableConfiguration ? "One-time permission, then automatic imports" : "Gmail sync is unavailable in this build"))
+                        : "Switch to Live mode to import Gmail purchases",
                     systemImage: "envelope.badge.fill",
                     action: {
-                        if emailSyncManager.hasUsableConfiguration {
+                        if appModeManager.selectedMode != .live {
+                            scanErrorMessage = "Switch to Live mode in Profile before importing purchases from Gmail."
+                        } else if emailSyncManager.hasUsableConfiguration {
                             Task {
                                 await emailSyncManager.connectOrSync()
                             }
@@ -167,6 +200,7 @@ struct CaptureView: View {
                     }
                 )
             }
+            .fixedSize(horizontal: false, vertical: true)
 
             if emailSyncManager.isSyncing || emailSyncManager.isAuthorizing {
                 HStack(spacing: 12) {
@@ -198,7 +232,7 @@ struct CaptureView: View {
                 actionButton(title: "Share to family", subtitle: "Assign during review", systemImage: "person.2.fill", action: {
                     reviewDraft = ReceiptDraft.emptyManual
                 })
-            }
+            }.fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -218,9 +252,10 @@ struct CaptureView: View {
                 Text(subtitle)
                     .font(.subheadline)
                     .foregroundStyle(AppTheme.secondaryAccent.opacity(0.72))
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(18)
-            .frame(maxWidth: .infinity, minHeight: 144, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 170, maxHeight: 170, alignment: .topLeading)
             .background(panelCard)
         }
         .buttonStyle(.plain)
@@ -258,12 +293,22 @@ struct CaptureView: View {
                 VStack(spacing: 12) {
                     previewRow(title: "Merchant", value: preview?.merchantName ?? "Waiting for scan")
                     previewRow(title: "Purchase date", value: preview.map { $0.purchaseDate.formatted(date: .abbreviated, time: .omitted) } ?? "Not parsed yet")
-                    previewRow(title: "Price", value: preview.map { $0.price.formatted(.currency(code: $0.currencyCode)) } ?? "$0.00")
+                    previewRow(title: "Price", value: preview.map { $0.price.formatted(.currency(code: $0.currencyCode)) } ?? "Will appear after scan")
                 }
 
-                HStack(spacing: 8) {
-                    previewPill(label: preview.map { "Return in \($0.returnDays) days" } ?? "Return window ready", color: AppTheme.warning)
-                    previewPill(label: preview.map { "Warranty \($0.warrantyMonths) months" } ?? "Warranty estimate ready", color: AppTheme.accent)
+                HStack(spacing: 10) {
+                    previewStatusCard(
+                        title: "Returns",
+                        value: preview.map { "\($0.returnDays) days" } ?? "Ready",
+                        icon: "arrow.uturn.backward.circle.fill",
+                        color: AppTheme.warning
+                    )
+                    previewStatusCard(
+                        title: "Warranty",
+                        value: preview.map { "\($0.warrantyMonths) months" } ?? "Estimate ready",
+                        icon: "checkmark.shield.fill",
+                        color: AppTheme.accent
+                    )
                 }
             }
             .padding(20)
@@ -276,46 +321,40 @@ struct CaptureView: View {
             sectionTitle("Recent capture timeline")
 
             if purchases.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Nothing captured yet")
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(AppTheme.ink)
-                    Text("Once something is scanned and reviewed, this becomes a calm timeline of what was added and what still needs attention.")
-                        .font(.subheadline)
-                        .foregroundStyle(AppTheme.secondaryAccent.opacity(0.74))
-                }
-                .padding(20)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(panelCard)
+                emptyTimelineCard(
+                    title: "Your capture timeline is waiting for its first receipt",
+                    message: "Once something is scanned and reviewed, this becomes a calm record of what was saved and what Keep Sure is watching for you."
+                )
             } else {
                 ForEach(purchases.prefix(4), id: \.objectID) { purchase in
-                    HStack(alignment: .top, spacing: 14) {
-                        Circle()
-                            .fill(AppTheme.accent.opacity(0.12))
-                            .frame(width: 48, height: 48)
-                            .overlay {
-                                Image(systemName: purchase.wrappedSourceType == "Email" ? "envelope.fill" : "doc.text.viewfinder")
-                                    .font(.headline.weight(.bold))
-                                    .foregroundStyle(AppTheme.accent)
-                            }
-
-                        VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .top) {
+                            Circle()
+                                .fill(AppTheme.accent.opacity(0.12))
+                                .frame(width: 48, height: 48)
+                                .overlay {
+                                    Image(systemName: purchase.wrappedSourceType == "Email" ? "envelope.fill" : "doc.text.viewfinder")
+                                        .font(.headline.weight(.bold))
+                                        .foregroundStyle(AppTheme.accent)
+                                }
                             Text(purchase.wrappedProductName)
                                 .font(.headline.weight(.semibold))
                                 .foregroundStyle(AppTheme.ink)
-                            Text("\(purchase.wrappedMerchantName) • \(purchase.wrappedSourceType)")
-                                .font(.subheadline)
-                                .foregroundStyle(AppTheme.secondaryAccent.opacity(0.7))
+                            
+                        }
+                        Text("\(purchase.wrappedMerchantName) • \(purchase.wrappedSourceType)")
+                            .font(.subheadline)
+                            .foregroundStyle(AppTheme.secondaryAccent.opacity(0.7))
+                        
+                        HStack(alignment: .top, spacing: 14) {
                             Text(purchase.statusLine)
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(AppTheme.warning)
+                            Spacer()
+                            Text(purchase.wrappedPurchaseDate, style: .date)
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(AppTheme.secondaryAccent.opacity(0.62))
                         }
-
-                        Spacer()
-
-                        Text(purchase.wrappedPurchaseDate, style: .date)
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(AppTheme.secondaryAccent.opacity(0.62))
                     }
                     .padding(18)
                     .background(panelCard)
@@ -362,13 +401,32 @@ struct CaptureView: View {
             .foregroundStyle(AppTheme.ink)
     }
 
-    private func previewPill(label: String, color: Color) -> some View {
-        Text(label)
-            .font(.caption.weight(.bold))
-            .foregroundStyle(color)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(color.opacity(0.12), in: Capsule())
+    private func previewStatusCard(title: String, value: String, icon: String, color: Color) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(color)
+                .frame(width: 28, height: 28)
+                .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(AppTheme.ink)
+                    .lineLimit(1)
+
+                Text(value)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(color)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
+        .background(color.opacity(0.10), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private func previewRow(title: String, value: String) -> some View {
@@ -382,6 +440,45 @@ struct CaptureView: View {
                 .foregroundStyle(AppTheme.ink)
                 .multilineTextAlignment(.trailing)
         }
+    }
+
+    private func delightfulBadge(text: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "sparkles")
+                .font(.caption.weight(.bold))
+            Text(text)
+                .font(.caption.weight(.bold))
+                .lineLimit(2)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.white.opacity(0.72), in: Capsule())
+        .foregroundStyle(AppTheme.accent)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func emptyTimelineCard(title: String, message: String) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: "face.smiling.inverse")
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.accent)
+                .frame(width: 42, height: 42)
+                .background(AppTheme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(AppTheme.ink)
+
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(AppTheme.secondaryAccent.opacity(0.74))
+            }
+
+            Spacer()
+        }
+        .padding(20)
+        .background(panelCard)
     }
 
     private func startScan() {
@@ -511,7 +608,7 @@ private struct ReceiptReviewView: View {
                 .tint(AppTheme.accent)
 
                 Picker("Household owner", selection: $draft.familyOwner) {
-                    ForEach(["You", "Maya", "Aarav", "Shared"], id: \.self, content: Text.init)
+                    ForEach(["Me", "Family", "Shared"], id: \.self, content: Text.init)
                 }
                 .tint(AppTheme.accent)
 
