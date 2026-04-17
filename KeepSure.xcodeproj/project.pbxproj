@@ -403,6 +403,7 @@
 				INFOPLIST_KEY_CFBundleURLTypes = "{\n    CFBundleURLName = KeepSureOAuth;\n    CFBundleURLSchemes =     (\n        \"com.saaain.keepsure\"\n    );\n}";
 				INFOPLIST_KEY_GmailClientID = "212198581284-iorcj2quhua0mh5m4k4boejvdb5270s4.apps.googleusercontent.com";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Keep Sure uses the camera to scan receipts and save your purchase details, return windows, and warranties.";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Keep Sure uses Face ID to protect your receipts, warranties, and purchase details when you return to the app.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = NO;
@@ -440,6 +441,7 @@
 				INFOPLIST_KEY_CFBundleURLTypes = "{\n    CFBundleURLName = KeepSureOAuth;\n    CFBundleURLSchemes =     (\n        \"com.saaain.keepsure\"\n    );\n}";
 				INFOPLIST_KEY_GmailClientID = "212198581284-iorcj2quhua0mh5m4k4boejvdb5270s4.apps.googleusercontent.com";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Keep Sure uses the camera to scan receipts and save your purchase details, return windows, and warranties.";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Keep Sure uses Face ID to protect your receipts, warranties, and purchase details when you return to the app.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = NO;

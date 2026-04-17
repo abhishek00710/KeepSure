@@ -3,13 +3,18 @@ import SwiftUI
 
 struct ProfileView: View {
     @EnvironmentObject private var emailSyncManager: EmailSyncManager
-    @EnvironmentObject private var appModeManager: AppModeManager
     @EnvironmentObject private var notificationManager: SmartNotificationManager
+    @EnvironmentObject private var securityManager: AppSecurityManager
     @AppStorage("email_sync_enabled") private var emailSyncEnabled = true
     @AppStorage("gmail_launch_prompt_deferred") private var gmailLaunchPromptDeferred = false
     @AppStorage("smart_alerts_enabled") private var smartAlertsEnabled = true
     @AppStorage("family_sharing_enabled") private var familySharingEnabled = true
-    @State private var pendingModeSwitch: AppMode?
+    @AppStorage("return_reminder_primary_days") private var returnReminderPrimaryDays = 7
+    @AppStorage("return_reminder_secondary_days") private var returnReminderSecondaryDays = 3
+    @AppStorage("return_reminder_final_days") private var returnReminderFinalDays = 1
+    @AppStorage("warranty_reminder_primary_days") private var warrantyReminderPrimaryDays = 30
+    @AppStorage("warranty_reminder_final_days") private var warrantyReminderFinalDays = 7
+    @AppStorage("review_nudge_hours") private var reviewNudgeHours = 24
 
     @FetchRequest(fetchRequest: PurchaseRecord.recentFetchRequest, animation: .snappy)
     private var purchases: FetchedResults<PurchaseRecord>
@@ -35,8 +40,6 @@ struct ProfileView: View {
                     .softEntrance(delay: 0.17)
                 privacyPanel
                     .softEntrance(delay: 0.22)
-                modePanel
-                    .softEntrance(delay: 0.27)
             }
             .padding(20)
         }
@@ -50,28 +53,6 @@ struct ProfileView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(emailSyncManager.errorMessage ?? "")
-        }
-        .confirmationDialog(
-            pendingModeSwitch == .demo ? "Switch to Demo mode?" : "Switch to Live mode?",
-            isPresented: Binding(
-                get: { pendingModeSwitch != nil },
-                set: { if !$0 { pendingModeSwitch = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            if let pendingModeSwitch {
-                Button(pendingModeSwitch == .live ? "Switch to Live mode" : "Switch to Demo mode") {
-                    Task {
-                        await applyModeSwitch(pendingModeSwitch)
-                        self.pendingModeSwitch = nil
-                    }
-                }
-                Button("Cancel", role: .cancel) {
-                    self.pendingModeSwitch = nil
-                }
-            }
-        } message: {
-            Text(pendingModeSwitch?.resetSummary ?? "")
         }
     }
 
@@ -121,22 +102,27 @@ struct ProfileView: View {
                     profileMessageMetric(title: "Protection", value: "Ready", subtitle: "Your first saved item will make this space feel alive.")
                     profileMessageMetric(title: "Next step", value: "Connect", subtitle: "Gmail or one scanned receipt is enough to begin.")
                 }
-            }
+            }.fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private var householdPanel: some View {
         panel(title: "Household sharing", icon: "person.2.fill") {
             VStack(spacing: 14) {
-                infoRow(title: "Sharing", value: familySharingEnabled ? "Family sharing is on" : "Family sharing is off")
-                infoRow(title: "Family snapshot", value: familySharingEnabled ? (hasPurchases ? "Shared purchases are easy to keep in one place" : "Your shared timeline will begin with your first saved purchase") : "Sharing is resting for now")
+                infoRow(title: "Status", value: "On the way")
+                infoRow(
+                    title: "What’s happening",
+                    value: familySharingEnabled
+                        ? "We’re keeping this space warm while real household syncing gets ready."
+                        : "Turn this on if you want Keep Sure to keep family sharing on your radar."
+                )
 
                 Toggle(isOn: $familySharingEnabled) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Enable family sharing")
+                        Text("Keep me posted when sharing is ready")
                             .font(.headline.weight(.semibold))
                             .foregroundStyle(AppTheme.ink)
-                        Text("Keep one household timeline instead of scattered receipts.")
+                        Text("This does not share receipts yet. It simply keeps the space ready while the real feature is being prepared.")
                             .font(.subheadline)
                             .foregroundStyle(AppTheme.secondaryAccent.opacity(0.7))
                     }
@@ -163,76 +149,70 @@ struct ProfileView: View {
 
                 if emailSyncEnabled {
                     VStack(alignment: .leading, spacing: 12) {
-                        if appModeManager.selectedMode != .live {
-                            Text("Gmail syncing is available in Live mode only. Switch modes below when you want real purchases instead of sample data.")
+                        infoRow(
+                            title: "Permission flow",
+                            value: emailSyncManager.isConnected ? "Granted through Google" : "Requested on first launch"
+                        )
+                        infoRow(title: "Inbox status", value: emailSyncManager.connectionStatusLine)
+
+                        if let connectedEmail = emailSyncManager.connectedEmail {
+                            infoRow(title: "Connected account", value: connectedEmail)
+                        }
+
+                        if let lastSyncAt = emailSyncManager.lastSyncAt {
+                            infoRow(
+                                title: "Last sync",
+                                value: lastSyncAt.formatted(date: .abbreviated, time: .shortened)
+                            )
+                        }
+
+                        if emailSyncManager.requiresBundledClientIDSetup {
+                            Text("Gmail syncing is not available in this build yet.")
                                 .font(.footnote.weight(.medium))
                                 .foregroundStyle(AppTheme.secondaryAccent.opacity(0.72))
                         } else {
-                            infoRow(
-                                title: "Permission flow",
-                                value: emailSyncManager.isConnected ? "Granted through Google" : "Requested on first launch"
-                            )
-                            infoRow(title: "Inbox status", value: emailSyncManager.connectionStatusLine)
+                            Text("Keep Sure asks Google for permission once, returns you to the app automatically, and then keeps your purchase tracking up to date.")
+                                .font(.footnote)
+                                .foregroundStyle(AppTheme.secondaryAccent.opacity(0.72))
+                        }
 
-                            if let connectedEmail = emailSyncManager.connectedEmail {
-                                infoRow(title: "Connected account", value: connectedEmail)
+                        if let statusMessage = emailSyncManager.statusMessage {
+                            Text(statusMessage)
+                                .font(.footnote.weight(.medium))
+                                .foregroundStyle(AppTheme.accent)
+                        }
+
+                        HStack(spacing: 10) {
+                            Button {
+                                gmailLaunchPromptDeferred = false
+                                Task {
+                                    await emailSyncManager.connectOrSync()
+                                }
+                            } label: {
+                                HStack(spacing: 8) {
+                                    if emailSyncManager.isAuthorizing || emailSyncManager.isSyncing {
+                                        ProgressView()
+                                            .progressViewStyle(.circular)
+                                            .tint(.white)
+                                    }
+                                    Text(emailSyncManager.isConnected ? "Sync Gmail now" : "Connect Gmail")
+                                        .font(.headline.weight(.semibold))
+                                }
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 18)
+                                .padding(.vertical, 12)
+                                .background(AppTheme.accent, in: Capsule())
                             }
+                            .buttonStyle(.plain)
+                            .disabled(emailSyncManager.requiresBundledClientIDSetup || emailSyncManager.isAuthorizing || emailSyncManager.isSyncing)
 
-                            if let lastSyncAt = emailSyncManager.lastSyncAt {
-                                infoRow(
-                                    title: "Last sync",
-                                    value: lastSyncAt.formatted(date: .abbreviated, time: .shortened)
-                                )
-                            }
-
-                            if emailSyncManager.requiresBundledClientIDSetup {
-                                Text("Gmail syncing is not available in this build yet.")
-                                    .font(.footnote.weight(.medium))
-                                    .foregroundStyle(AppTheme.secondaryAccent.opacity(0.72))
-                            } else {
-                                Text("Keep Sure asks Google for permission once, returns you to the app automatically, and then keeps your purchase tracking up to date.")
-                                    .font(.footnote)
-                                    .foregroundStyle(AppTheme.secondaryAccent.opacity(0.72))
-                            }
-
-                            if let statusMessage = emailSyncManager.statusMessage {
-                                Text(statusMessage)
-                                    .font(.footnote.weight(.medium))
-                                    .foregroundStyle(AppTheme.accent)
-                            }
-
-                            HStack(spacing: 10) {
-                                Button {
+                            if emailSyncManager.isConnected {
+                                Button("Disconnect") {
                                     gmailLaunchPromptDeferred = false
-                                    Task {
-                                        await emailSyncManager.connectOrSync()
-                                    }
-                                } label: {
-                                    HStack(spacing: 8) {
-                                        if emailSyncManager.isAuthorizing || emailSyncManager.isSyncing {
-                                            ProgressView()
-                                                .progressViewStyle(.circular)
-                                                .tint(.white)
-                                        }
-                                        Text(emailSyncManager.isConnected ? "Sync Gmail now" : "Connect Gmail")
-                                            .font(.headline.weight(.semibold))
-                                    }
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 18)
-                                    .padding(.vertical, 12)
-                                    .background(AppTheme.accent, in: Capsule())
+                                    emailSyncManager.disconnect()
                                 }
-                                .buttonStyle(.plain)
-                                .disabled(emailSyncManager.requiresBundledClientIDSetup || emailSyncManager.isAuthorizing || emailSyncManager.isSyncing)
-
-                                if emailSyncManager.isConnected {
-                                    Button("Disconnect") {
-                                        gmailLaunchPromptDeferred = false
-                                        emailSyncManager.disconnect()
-                                    }
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(AppTheme.secondaryAccent)
-                                }
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(AppTheme.secondaryAccent)
                             }
                         }
                     }
@@ -285,9 +265,29 @@ struct ProfileView: View {
         panel(title: "Preferences", icon: "slider.horizontal.3") {
             VStack(spacing: 14) {
                 infoRow(title: "Retailer return policies", value: "Coming soon")
-                infoRow(title: "Return reminders", value: "7, 3, and 1 day before the window closes")
-                infoRow(title: "Warranty reminders", value: "30 and 7 days before confirmed coverage ends")
-                infoRow(title: "Review nudges", value: "Next day for uncertain imports only")
+                timingCard(
+                    title: "Return reminders",
+                    subtitle: "Choose how early Keep Sure should start nudging you before a return window closes."
+                ) {
+                    timingStepper(title: "First reminder", value: $returnReminderPrimaryDays, range: 1...30, unit: "day")
+                    timingStepper(title: "Second reminder", value: $returnReminderSecondaryDays, range: 1...21, unit: "day")
+                    timingStepper(title: "Final reminder", value: $returnReminderFinalDays, range: 1...7, unit: "day")
+                }
+
+                timingCard(
+                    title: "Warranty reminders",
+                    subtitle: "Set how far ahead confirmed coverage should come back onto your radar."
+                ) {
+                    timingStepper(title: "Early reminder", value: $warrantyReminderPrimaryDays, range: 1...90, unit: "day")
+                    timingStepper(title: "Final reminder", value: $warrantyReminderFinalDays, range: 1...30, unit: "day")
+                }
+
+                timingCard(
+                    title: "Review nudges",
+                    subtitle: "Control how quickly uncertain imports come back for one small clean-up pass."
+                ) {
+                    timingStepper(title: "Nudge after", value: $reviewNudgeHours, range: 1...72, unit: "hour")
+                }
                 infoRow(title: "Claim assistant", value: "Planned")
                 infoRow(title: "Receipt export", value: "PDF and CSV")
             }
@@ -301,26 +301,33 @@ struct ProfileView: View {
                     .font(.subheadline)
                     .foregroundStyle(AppTheme.secondaryAccent.opacity(0.74))
 
-                infoRow(title: "Face ID lock", value: "Recommended")
+                Toggle(isOn: Binding(
+                    get: { securityManager.isProtectionEnabled },
+                    set: { newValue in
+                        Task {
+                            await securityManager.setProtectionEnabled(newValue)
+                        }
+                    }
+                )) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Lock Keep Sure with \(securityManager.biometryLabel)")
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(AppTheme.ink)
+                        Text(securityManager.protectionStatusLine)
+                            .font(.subheadline)
+                            .foregroundStyle(AppTheme.secondaryAccent.opacity(0.72))
+                    }
+                }
+                .tint(AppTheme.accent)
+
+                if let errorMessage = securityManager.errorMessage, !errorMessage.isEmpty {
+                    Text(errorMessage)
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(AppTheme.warning)
+                }
+
                 infoRow(title: "Data export", value: "Available anytime")
                 infoRow(title: "Cloud backup", value: "Ready for next step")
-            }
-        }
-    }
-
-    private var modePanel: some View {
-        panel(title: "App mode", icon: "square.2.layers.3d.fill") {
-            VStack(alignment: .leading, spacing: 14) {
-                infoRow(title: "Current mode", value: appModeManager.selectedMode?.title ?? "Not selected")
-
-                Text("Demo mode keeps sample purchases in place. Live mode clears local purchases and makes Gmail sync the first step.")
-                    .font(.subheadline)
-                    .foregroundStyle(AppTheme.secondaryAccent.opacity(0.74))
-
-                HStack(spacing: 12) {
-                    modeButton(for: .demo)
-                    modeButton(for: .live)
-                }
             }
         }
     }
@@ -374,7 +381,7 @@ struct ProfileView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .fill(AppTheme.elevatedPanelFill)
@@ -423,61 +430,47 @@ struct ProfileView: View {
         }
     }
 
-    private func modeButton(for mode: AppMode) -> some View {
-        let isSelected = appModeManager.selectedMode == mode
+    private func timingCard<Content: View>(title: String, subtitle: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(AppTheme.ink)
 
-        return Button {
-            pendingModeSwitch = mode
-        } label: {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text(mode.shortTitle)
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(isSelected ? .white : AppTheme.ink)
-                    Spacer()
-                    if isSelected {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.white)
-                    }
+            Text(subtitle)
+                .font(.subheadline)
+                .foregroundStyle(AppTheme.secondaryAccent.opacity(0.74))
+
+            content()
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(AppTheme.elevatedPanelFill)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.74), lineWidth: 1)
                 }
-
-                Text(mode.summary)
-                    .font(.footnote)
-                    .foregroundStyle(isSelected ? Color.white.opacity(0.88) : AppTheme.secondaryAccent.opacity(0.76))
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(isSelected ? AppTheme.accent : AppTheme.elevatedPanelFill)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .strokeBorder(isSelected ? AppTheme.accent : Color.white.opacity(0.75), lineWidth: 1)
-                    }
-            )
-        }
-        .buttonStyle(.plain)
-        .disabled(appModeManager.isApplying || (mode == .live && emailSyncManager.isAuthorizing))
+        )
     }
 
-    private func applyModeSwitch(_ mode: AppMode) async {
-        if mode == .live {
-            emailSyncEnabled = true
-            gmailLaunchPromptDeferred = false
-        }
-
-        await appModeManager.select(mode)
-
-        guard appModeManager.selectedMode == mode else { return }
-
-        if mode == .live {
-            if emailSyncManager.isConnected {
-                await emailSyncManager.syncInbox()
-            } else if emailSyncManager.hasUsableConfiguration {
-                await emailSyncManager.connectGmail()
+    private func timingStepper(title: String, value: Binding<Int>, range: ClosedRange<Int>, unit: String) -> some View {
+        Stepper(value: value, in: range) {
+            HStack {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.secondaryAccent.opacity(0.72))
+                Spacer()
+                Text("\(value.wrappedValue) \(value.wrappedValue == 1 ? unit : "\(unit)s")")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(AppTheme.ink)
             }
         }
-
-        await notificationManager.rescheduleAll(in: PersistenceController.shared.container)
+        .tint(AppTheme.accent)
+        .onChange(of: value.wrappedValue) { _, _ in
+            Task {
+                await notificationManager.rescheduleAll(in: PersistenceController.shared.container)
+            }
+        }
     }
+
 }

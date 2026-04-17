@@ -31,85 +31,6 @@ final class PersistenceController {
         container.viewContext.mergePolicy = NSMergePolicy.mergeByPropertyObjectTrump
     }
 
-    func ensureDemoDataIfNeeded() throws {
-        let context = container.viewContext
-        let request = PurchaseRecord.fetchRequest()
-        request.fetchLimit = 1
-
-        let existing = try context.count(for: request)
-        guard existing == 0 else { return }
-        try seedDemoPurchases(in: context)
-    }
-
-    func resetToDemoMode() throws {
-        let context = container.viewContext
-        try clearAllPurchases(in: context)
-        try seedDemoPurchases(in: context)
-    }
-
-    func resetToLiveMode() throws {
-        try clearAllPurchases(in: container.viewContext)
-    }
-
-    private func clearAllPurchases(in context: NSManagedObjectContext) throws {
-        let request = PurchaseRecord.fetchRequest()
-        let purchases = try context.fetch(request)
-
-        for purchase in purchases {
-            context.delete(purchase)
-        }
-
-        if context.hasChanges {
-            try context.save()
-        }
-    }
-
-    private func seedDemoPurchases(in context: NSManagedObjectContext) throws {
-        let now = Date()
-        let examples: [(String, String, String, String, Double, Int, Int, Int)] = [
-            ("Dyson Airwrap", "Sephora", "Beauty", "You", 599, -12, 30, 24),
-            ("Nintendo Switch OLED", "Target", "Electronics", "Aarav", 349, -6, 15, 12),
-            ("Patio String Lights", "Costco", "Home", "Maya", 119, -20, 90, 24),
-            ("Carry-on Suitcase", "Away", "Travel", "You", 275, -40, 100, 60)
-        ]
-
-        for item in examples {
-            let purchase = PurchaseRecord(context: context)
-            let purchaseDate = Calendar.current.date(byAdding: .day, value: item.5, to: now) ?? now
-            let windows = PurchaseWindows.makeDeadlines(
-                purchaseDate: purchaseDate,
-                returnDays: item.6,
-                warrantyMonths: item.7
-            )
-
-            purchase.id = UUID()
-            purchase.productName = item.0
-            purchase.merchantName = item.1
-            purchase.categoryName = item.2
-            purchase.familyOwner = item.3
-            purchase.price = item.4
-            purchase.purchaseDate = purchaseDate
-            purchase.returnDeadline = windows.returnDeadline
-            purchase.warrantyExpiration = windows.warrantyExpiration
-            purchase.warrantyStatusRaw = WarrantyStatus.confirmed.rawValue
-            purchase.sourceType = item.1 == "Target" ? "Email" : "Scan"
-            purchase.currencyCode = "USD"
-            purchase.notes = "Seeded sample purchase for the first dashboard experience."
-            purchase.createdAt = purchaseDate
-            purchase.isArchived = false
-            purchase.returnCompleted = false
-            purchase.externalProvider = item.1 == "Target" ? "demo" : nil
-            purchase.externalRecordID = item.1 == "Target" ? UUID().uuidString : nil
-            purchase.lastSyncedAt = item.1 == "Target" ? .now : nil
-            purchase.gmailOrderNumber = item.1 == "Target" ? "DEMO-\(UUID().uuidString.prefix(8))" : nil
-            purchase.gmailLifecycleStageRaw = item.1 == "Target" ? GmailOrderStage.delivered.rawValue : nil
-        }
-
-        if context.hasChanges {
-            try context.save()
-        }
-    }
-
     private static func makeModel() -> NSManagedObjectModel {
         let model = NSManagedObjectModel()
         let entity = NSEntityDescription()
@@ -129,6 +50,8 @@ final class PersistenceController {
             attribute(name: "returnDeadline", type: .dateAttributeType, optional: true),
             attribute(name: "warrantyExpiration", type: .dateAttributeType, optional: true),
             attribute(name: "warrantyStatusRaw", type: .stringAttributeType, optional: true),
+            attribute(name: "returnExplanation", type: .stringAttributeType, optional: true),
+            attribute(name: "warrantyExplanation", type: .stringAttributeType, optional: true),
             attribute(name: "createdAt", type: .dateAttributeType),
             attribute(name: "price", type: .doubleAttributeType, optional: false),
             attribute(name: "isArchived", type: .booleanAttributeType, optional: false),
@@ -137,7 +60,12 @@ final class PersistenceController {
             attribute(name: "externalRecordID", type: .stringAttributeType, optional: true),
             attribute(name: "lastSyncedAt", type: .dateAttributeType, optional: true),
             attribute(name: "gmailOrderNumber", type: .stringAttributeType, optional: true),
-            attribute(name: "gmailLifecycleStageRaw", type: .stringAttributeType, optional: true)
+            attribute(name: "gmailLifecycleStageRaw", type: .stringAttributeType, optional: true),
+            attribute(name: "proofPreviewData", type: .binaryDataAttributeType, optional: true),
+            attribute(name: "proofDocumentData", type: .binaryDataAttributeType, optional: true),
+            attribute(name: "proofDocumentType", type: .stringAttributeType, optional: true),
+            attribute(name: "proofDocumentName", type: .stringAttributeType, optional: true),
+            attribute(name: "proofHTMLData", type: .binaryDataAttributeType, optional: true)
         ]
 
         model.entities = [entity]

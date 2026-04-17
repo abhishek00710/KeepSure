@@ -3,6 +3,7 @@ import Combine
 import CoreData
 import CryptoKit
 import Foundation
+import PDFKit
 import Security
 import SwiftUI
 import UIKit
@@ -598,6 +599,7 @@ struct GmailMessage: Equatable {
     let from: String
     let snippet: String
     let body: String
+    let htmlBody: String?
     let date: Date?
 }
 
@@ -606,6 +608,7 @@ private struct GmailParsedPurchase {
     let orderNumber: String?
     let stage: GmailOrderStage
     let merchantName: String
+    let messageID: String
 }
 
 enum GmailOrderStage: String {
@@ -614,7 +617,7 @@ enum GmailOrderStage: String {
     case delivered
     case unknown
 
-    var noteTitle: String {
+    nonisolated var noteTitle: String {
         switch self {
         case .placed:
             return "Order placed"
@@ -627,7 +630,7 @@ enum GmailOrderStage: String {
         }
     }
 
-    var statusLineTitle: String {
+    nonisolated var statusLineTitle: String {
         switch self {
         case .placed:
             return "Order placed"
@@ -725,6 +728,7 @@ private struct GmailMessageResponse: Decodable {
         let subject = payload?.header(named: "Subject") ?? ""
         let from = payload?.header(named: "From") ?? ""
         let body = payload?.combinedText() ?? ""
+        let htmlBody = payload?.combinedHTML()
         let snippet = snippet ?? ""
 
         guard !subject.isEmpty || !snippet.isEmpty || !body.isEmpty else {
@@ -744,6 +748,7 @@ private struct GmailMessageResponse: Decodable {
             from: from,
             snippet: snippet,
             body: body,
+            htmlBody: htmlBody,
             date: parsedDate
         )
     }
@@ -768,6 +773,17 @@ private struct GmailPayload: Decodable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    func combinedHTML() -> String? {
+        var chunks: [String] = []
+        collectHTML(into: &chunks)
+        let combined = chunks
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return combined.isEmpty ? nil : combined
+    }
+
     private func collectText(into chunks: inout [String]) {
         let mime = mimeType?.lowercased() ?? ""
 
@@ -777,24 +793,25 @@ private struct GmailPayload: Decodable {
             }
         } else if mime == "text/html" {
             if let html = body?.decodedString {
-                let plain = html
-                    .replacingOccurrences(of: "(?i)<br\\s*/?>", with: "\n", options: .regularExpression)
-                    .replacingOccurrences(of: "(?i)</p\\s*>", with: "\n", options: .regularExpression)
-                    .replacingOccurrences(of: "(?i)</div\\s*>", with: "\n", options: .regularExpression)
-                    .replacingOccurrences(of: "(?i)</tr\\s*>", with: "\n", options: .regularExpression)
-                    .replacingOccurrences(of: "(?i)</td\\s*>", with: " ", options: .regularExpression)
-                    .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
-                    .replacingOccurrences(of: "&nbsp;", with: " ")
-                    .replacingOccurrences(of: "&amp;", with: "&")
-                    .replacingOccurrences(of: "&quot;", with: "\"")
-                    .replacingOccurrences(of: "&#39;", with: "'")
-                    .replacingOccurrences(of: "&apos;", with: "'")
+                let plain = GmailHTMLFormatter.structuredText(from: html)
                 chunks.append(plain)
             }
         }
 
         for part in parts ?? [] {
             part.collectText(into: &chunks)
+        }
+    }
+
+    private func collectHTML(into chunks: inout [String]) {
+        let mime = mimeType?.lowercased() ?? ""
+
+        if mime == "text/html", let html = body?.decodedString, !html.isEmpty {
+            chunks.append(html)
+        }
+
+        for part in parts ?? [] {
+            part.collectHTML(into: &chunks)
         }
     }
 }
@@ -942,12 +959,19 @@ enum GmailPurchaseParser {
         draft.notes = buildNotes(subject: message.subject, body: combinedText, orderNumber: orderNumber, stage: stage)
         draft.recognizedText = combinedText
         draft.pageCount = 1
+        let proof = GmailProofBuilder.makeProof(for: message, merchant: merchant, orderNumber: orderNumber, stage: stage)
+        draft.proofPreviewData = proof.previewData
+        draft.proofDocumentData = proof.documentData
+        draft.proofDocumentType = proof.documentType
+        draft.proofDocumentName = proof.documentName
+        draft.proofHTMLData = message.htmlBody?.data(using: .utf8)
 
         return GmailParsedPurchase(
             draft: draft,
             orderNumber: orderNumber,
             stage: stage,
-            merchantName: merchant
+            merchantName: merchant,
+            messageID: message.id
         )
     }
 
@@ -1047,7 +1071,7 @@ enum GmailPurchaseParser {
         return normalized.isEmpty ? nil : normalized
     }
 
-    private static func inferOrderTotal(from body: String) -> Double? {
+    nonisolated fileprivate static func inferOrderTotal(from body: String) -> Double? {
         let patterns = [
             #"(?i)(?:order total|grand total|total paid|amount paid|payment total|total)[^\d$]{0,12}\$?\s*([0-9]+(?:\.[0-9]{2})?)"#,
             #"(?i)\$([0-9]+(?:\.[0-9]{2})?)\s*(?:order total|grand total|total paid|amount paid)"#
@@ -1171,7 +1195,7 @@ enum GmailPurchaseParser {
             && !blocked.contains(where: lower.contains)
     }
 
-    private static func firstMatch(in text: String, pattern: String) -> String? {
+    nonisolated private static func firstMatch(in text: String, pattern: String) -> String? {
         guard let expression = try? NSRegularExpression(pattern: pattern) else { return nil }
         let range = NSRange(text.startIndex..., in: text)
         guard
@@ -1334,6 +1358,192 @@ private struct MerchantProfile {
     let productPatterns: [String]
 }
 
+private enum GmailHTMLFormatter {
+    nonisolated static func structuredText(from html: String) -> String {
+        html
+            .replacingOccurrences(of: "(?i)<br\\s*/?>", with: "\n", options: .regularExpression)
+            .replacingOccurrences(of: "(?i)</p\\s*>", with: "\n\n", options: .regularExpression)
+            .replacingOccurrences(of: "(?i)</div\\s*>", with: "\n", options: .regularExpression)
+            .replacingOccurrences(of: "(?i)</li\\s*>", with: "\n", options: .regularExpression)
+            .replacingOccurrences(of: "(?i)<li[^>]*>", with: "• ", options: .regularExpression)
+            .replacingOccurrences(of: "(?i)</h[1-6]\\s*>", with: "\n", options: .regularExpression)
+            .replacingOccurrences(of: "(?i)</tr\\s*>", with: "\n", options: .regularExpression)
+            .replacingOccurrences(of: "(?i)</t[dh]\\s*>", with: "   ", options: .regularExpression)
+            .replacingOccurrences(of: "(?i)<t[dh][^>]*>", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "&apos;", with: "'")
+            .replacingOccurrences(of: "\u{00A0}", with: " ")
+            .replacingOccurrences(of: "[ \t]+", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+private enum GmailProofBuilder {
+    static func makeProof(for message: GmailMessage, merchant: String, orderNumber: String?, stage: GmailOrderStage) -> (previewData: Data?, documentData: Data?, documentType: String, documentName: String) {
+        let documentName = proofDocumentName(merchant: merchant, orderNumber: orderNumber, stage: stage)
+        let rendererFormat = UIGraphicsPDFRendererFormat()
+        let pageRect = CGRect(x: 0, y: 0, width: 612, height: 792)
+        let renderer = UIGraphicsPDFRenderer(bounds: pageRect, format: rendererFormat)
+
+        let pdfData = renderer.pdfData { context in
+            context.beginPage()
+
+            let titleFont = UIFont.systemFont(ofSize: 22, weight: .bold)
+            let labelFont = UIFont.systemFont(ofSize: 10, weight: .semibold)
+            let valueFont = UIFont.systemFont(ofSize: 13, weight: .regular)
+            let bodyFont = UIFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
+            let highlightFont = UIFont.monospacedSystemFont(ofSize: 12, weight: .medium)
+
+            let contentWidth = pageRect.width - 64
+            var y: CGFloat = 36
+
+            func drawLine(_ text: String, font: UIFont, color: UIColor = UIColor(AppTheme.ink), spacingAfter: CGFloat = 12) {
+                guard !text.isEmpty else { return }
+                let paragraph = NSMutableParagraphStyle()
+                paragraph.lineBreakMode = .byWordWrapping
+                let attributed = NSAttributedString(
+                    string: text,
+                    attributes: [
+                        .font: font,
+                        .foregroundColor: color,
+                        .paragraphStyle: paragraph
+                    ]
+                )
+                let maxRect = CGRect(x: 32, y: y, width: contentWidth, height: 10_000)
+                let measured = attributed.boundingRect(with: maxRect.size, options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
+
+                if y + measured.height > pageRect.height - 40 {
+                    context.beginPage()
+                    y = 36
+                }
+
+                attributed.draw(with: CGRect(x: 32, y: y, width: contentWidth, height: ceil(measured.height)), options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
+                y += ceil(measured.height) + spacingAfter
+            }
+
+            drawLine("Keep Sure Gmail Proof", font: titleFont, spacingAfter: 18)
+            drawLine("EMAIL SNAPSHOT", font: labelFont, color: UIColor(AppTheme.accent), spacingAfter: 8)
+            drawLine("Merchant: \(merchant)", font: valueFont, spacingAfter: 6)
+            drawLine("Stage: \(stage.statusLineTitle)", font: valueFont, spacingAfter: 6)
+            if let orderNumber, !orderNumber.isEmpty {
+                drawLine("Order: \(orderNumber)", font: valueFont, spacingAfter: 6)
+            }
+            if let date = message.date {
+                drawLine("Date: \(date.formatted(date: .abbreviated, time: .shortened))", font: valueFont, spacingAfter: 6)
+            }
+            drawLine("From: \(message.from)", font: valueFont, spacingAfter: 6)
+            drawLine("Subject: \(message.subject)", font: valueFont, spacingAfter: 16)
+
+            let highlights = orderHighlights(for: message, orderNumber: orderNumber, stage: stage)
+            if !highlights.isEmpty {
+                drawLine("ORDER HIGHLIGHTS", font: labelFont, color: UIColor(AppTheme.accent), spacingAfter: 8)
+                for line in highlights {
+                    drawLine(line, font: highlightFont, color: UIColor(AppTheme.ink), spacingAfter: 6)
+                }
+                y += 8
+            }
+
+            let lineItems = likelyLineItems(for: message, merchant: merchant)
+            if !lineItems.isEmpty {
+                drawLine("LIKELY LINE ITEMS", font: labelFont, color: UIColor(AppTheme.accent), spacingAfter: 8)
+                for item in lineItems.prefix(8) {
+                    drawLine(item, font: bodyFont, color: UIColor(AppTheme.ink), spacingAfter: 6)
+                }
+                y += 10
+            }
+
+            drawLine("SNIPPET", font: labelFont, color: UIColor(AppTheme.accent), spacingAfter: 8)
+            drawLine(message.snippet, font: bodyFont, color: UIColor(AppTheme.secondaryAccent), spacingAfter: 18)
+
+            drawLine("MESSAGE BODY", font: labelFont, color: UIColor(AppTheme.accent), spacingAfter: 8)
+            let preferredBody = message.htmlBody.map(GmailHTMLFormatter.structuredText(from:)) ?? message.body
+            let cleanedBody = preferredBody
+                .components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+            drawLine(cleanedBody.isEmpty ? "No body text available." : cleanedBody, font: bodyFont, color: UIColor(AppTheme.ink), spacingAfter: 12)
+        }
+
+        let previewData: Data?
+        if let document = PDFDocument(data: pdfData), let firstPage = document.page(at: 0) {
+            let image = ReceiptPDFOCR.render(page: firstPage)
+            previewData = image.flatMap(ReceiptProofBuilder.makePreviewData(from:))
+        } else {
+            previewData = nil
+        }
+
+        return (previewData, pdfData, "pdf", documentName)
+    }
+
+    nonisolated private static func proofDocumentName(merchant: String, orderNumber: String?, stage: GmailOrderStage) -> String {
+        let merchantPart = merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Gmail" : merchant
+        let orderPart = (orderNumber?.isEmpty == false ? orderNumber! : stage.rawValue.capitalized)
+        return "\(merchantPart) \(orderPart) email proof.pdf"
+    }
+
+    nonisolated private static func orderHighlights(for message: GmailMessage, orderNumber: String?, stage: GmailOrderStage) -> [String] {
+        var lines: [String] = []
+
+        if let orderNumber, !orderNumber.isEmpty {
+            lines.append("Order number: \(orderNumber)")
+        }
+
+        if let total = GmailPurchaseParser.inferOrderTotal(from: "\(message.subject)\n\(message.body)") {
+            lines.append("Order total: \(total.formatted(.currency(code: "USD")))")
+        }
+
+        if let date = message.date {
+            lines.append("Email date: \(date.formatted(date: .abbreviated, time: .shortened))")
+        }
+
+        lines.append("Lifecycle stage: \(stage.statusLineTitle)")
+        return lines
+    }
+
+    nonisolated private static func likelyLineItems(for message: GmailMessage, merchant: String) -> [String] {
+        let source = message.htmlBody.map(GmailHTMLFormatter.structuredText(from:)) ?? message.body
+        let lines = source
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        let blocked = [
+            "subtotal", "tax", "shipping", "delivery", "order number", "confirmation",
+            "track your package", "billed to", "payment", "visa", "mastercard", "discover",
+            "return policy", "need help", "customer service", "support"
+        ]
+
+        var results: [String] = []
+        for line in lines {
+            let lower = line.lowercased()
+            guard lower.range(of: merchant.lowercased()) == nil || line.count > merchant.count + 8 else { continue }
+            guard blocked.allSatisfy({ !lower.contains($0) }) else { continue }
+            let hasLetters = line.rangeOfCharacter(from: .letters) != nil
+            let hasPrice = lower.range(of: #"\$?\d+(?:\.\d{2})"#, options: .regularExpression) != nil
+            let looksTableRow = line.contains("   ") || line.contains("•")
+            guard hasLetters && (hasPrice || looksTableRow) else { continue }
+            results.append(line)
+        }
+
+        var unique: [String] = []
+        for result in results {
+            if !unique.contains(where: { $0.caseInsensitiveCompare(result) == .orderedSame }) {
+                unique.append(result)
+            }
+        }
+        return unique
+    }
+}
+
 private enum GmailPurchaseImporter {
     static func importMessages(_ messages: [GmailMessage], in context: NSManagedObjectContext) throws -> GmailImportSummary {
         var imported = 0
@@ -1341,13 +1551,18 @@ private enum GmailPurchaseImporter {
         var skipped = 0
 
         for message in messages {
+            let parsed = GmailPurchaseParser.parse(message)
+
             if let existing = try existingRecord(for: message.id, in: context) {
+                if let parsed {
+                    merge(parsed: parsed, into: existing)
+                }
                 existing.lastSyncedAt = Date()
                 updated += 1
                 continue
             }
 
-            guard let parsed = GmailPurchaseParser.parse(message) else {
+            guard let parsed else {
                 skipped += 1
                 continue
             }
@@ -1415,12 +1630,15 @@ private enum GmailPurchaseImporter {
         record.returnDeadline = chooseLaterLifecycleDate(existing: record.returnDeadline, incoming: windows.returnDeadline)
         record.warrantyExpiration = chooseLaterLifecycleDate(existing: record.warrantyExpiration, incoming: windows.warrantyExpiration)
         record.warrantyStatusRaw = preferredWarrantyStatus(existing: record.warrantyStatusRaw, incoming: draft.warrantyStatus.rawValue)
+        record.returnExplanation = draft.returnExplanationText
+        record.warrantyExplanation = draft.warrantyExplanationText
         record.createdAt = record.createdAt ?? .now
         record.price = max(record.price, draft.price)
         record.isArchived = false
         record.returnCompleted = false
         record.gmailOrderNumber = parsed.orderNumber ?? record.gmailOrderNumber
         record.gmailLifecycleStageRaw = preferredLifecycleStage(existing: record.gmailLifecycleStageRaw, incoming: parsed.stage.rawValue)
+        mergeProof(from: parsed.draft, into: record)
     }
 
     private static func populate(record: PurchaseRecord, from parsed: GmailParsedPurchase, messageID: String) {
@@ -1439,6 +1657,8 @@ private enum GmailPurchaseImporter {
         record.returnDeadline = windows.returnDeadline
         record.warrantyExpiration = windows.warrantyExpiration
         record.warrantyStatusRaw = draft.warrantyStatus.rawValue
+        record.returnExplanation = draft.returnExplanationText
+        record.warrantyExplanation = draft.warrantyExplanationText
         record.createdAt = .now
         record.price = draft.price
         record.isArchived = false
@@ -1448,6 +1668,11 @@ private enum GmailPurchaseImporter {
         record.lastSyncedAt = .now
         record.gmailOrderNumber = parsed.orderNumber
         record.gmailLifecycleStageRaw = parsed.stage.rawValue
+        record.proofPreviewData = draft.proofPreviewData
+        record.proofDocumentData = draft.proofDocumentData
+        record.proofDocumentType = draft.proofDocumentType.isEmpty ? nil : draft.proofDocumentType
+        record.proofDocumentName = draft.proofDocumentName.isEmpty ? nil : draft.proofDocumentName
+        record.proofHTMLData = draft.proofHTMLData
     }
 
     private static func preferredValue(current: String?, incoming: String) -> String {
@@ -1514,6 +1739,28 @@ private enum GmailPurchaseImporter {
         }
 
         return parts.joined(separator: " • ")
+    }
+
+    private static func mergeProof(from draft: ReceiptDraft, into record: PurchaseRecord) {
+        if record.proofPreviewData == nil, let previewData = draft.proofPreviewData {
+            record.proofPreviewData = previewData
+        }
+
+        if record.proofDocumentData == nil, let documentData = draft.proofDocumentData {
+            record.proofDocumentData = documentData
+        }
+
+        if (record.proofDocumentType ?? "").isEmpty, !draft.proofDocumentType.isEmpty {
+            record.proofDocumentType = draft.proofDocumentType
+        }
+
+        if (record.proofDocumentName ?? "").isEmpty, !draft.proofDocumentName.isEmpty {
+            record.proofDocumentName = draft.proofDocumentName
+        }
+
+        if record.proofHTMLData == nil, let proofHTMLData = draft.proofHTMLData {
+            record.proofHTMLData = proofHTMLData
+        }
     }
 }
 

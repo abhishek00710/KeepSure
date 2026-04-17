@@ -1,5 +1,6 @@
 import CoreData
 import Foundation
+import UIKit
 
 @objc(PurchaseRecord)
 final class PurchaseRecord: NSManagedObject {
@@ -15,6 +16,8 @@ final class PurchaseRecord: NSManagedObject {
     @NSManaged var returnDeadline: Date?
     @NSManaged var warrantyExpiration: Date?
     @NSManaged var warrantyStatusRaw: String?
+    @NSManaged var returnExplanation: String?
+    @NSManaged var warrantyExplanation: String?
     @NSManaged var createdAt: Date?
     @NSManaged var price: Double
     @NSManaged var isArchived: Bool
@@ -24,6 +27,11 @@ final class PurchaseRecord: NSManagedObject {
     @NSManaged var lastSyncedAt: Date?
     @NSManaged var gmailOrderNumber: String?
     @NSManaged var gmailLifecycleStageRaw: String?
+    @NSManaged var proofPreviewData: Data?
+    @NSManaged var proofDocumentData: Data?
+    @NSManaged var proofDocumentType: String?
+    @NSManaged var proofDocumentName: String?
+    @NSManaged var proofHTMLData: Data?
 }
 
 extension PurchaseRecord {
@@ -40,7 +48,7 @@ extension PurchaseRecord {
     var wrappedProductName: String { productName ?? "Untitled purchase" }
     var wrappedMerchantName: String { merchantName ?? "Unknown merchant" }
     var wrappedCategoryName: String { categoryName ?? "General" }
-    var wrappedFamilyOwner: String { familyOwner ?? "You" }
+    var wrappedFamilyOwner: String { ReceiptDraft.normalizedFamilyOwner(familyOwner) }
     var wrappedSourceType: String { sourceType ?? "Scan" }
     var wrappedNotes: String { notes ?? "" }
     var wrappedCurrencyCode: String { currencyCode ?? "USD" }
@@ -48,7 +56,45 @@ extension PurchaseRecord {
     var wrappedCreatedAt: Date { createdAt ?? wrappedPurchaseDate }
     var wrappedExternalProvider: String { externalProvider ?? "" }
     var wrappedGmailOrderNumber: String { gmailOrderNumber ?? "" }
+    var wrappedProofDocumentType: String { proofDocumentType ?? "" }
+    var wrappedProofDocumentName: String { proofDocumentName ?? "" }
+    var trackedReturnDays: Int {
+        guard let purchaseDate, let returnDeadline else { return 0 }
+        return max(Calendar.current.dateComponents([.day], from: purchaseDate, to: returnDeadline).day ?? 0, 0)
+    }
+    var trackedWarrantyMonths: Int {
+        guard let purchaseDate, let warrantyExpiration else { return 0 }
+        return max(Calendar.current.dateComponents([.month], from: purchaseDate, to: warrantyExpiration).month ?? 0, 0)
+    }
+    var wrappedReturnExplanation: String {
+        let stored = returnExplanation?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !stored.isEmpty {
+            return stored
+        }
+        return ProtectionExplanationBuilder.returnExplanation(
+            merchant: wrappedMerchantName,
+            sourceType: wrappedSourceType,
+            returnDays: trackedReturnDays
+        )
+    }
+    var wrappedWarrantyExplanation: String {
+        let stored = warrantyExplanation?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !stored.isEmpty {
+            return stored
+        }
+        return ProtectionExplanationBuilder.warrantyExplanation(
+            status: warrantyStatus,
+            months: warrantyStatus == .none ? 0 : trackedWarrantyMonths,
+            evidenceNote: warrantyStatus.reviewGuidance
+        )
+    }
+    var hasRichHTMLProof: Bool { proofHTMLData != nil }
     var isReturnHandled: Bool { returnCompleted }
+    var hasReceiptProof: Bool { proofPreviewData != nil || proofDocumentData != nil }
+    var receiptPreviewImage: UIImage? {
+        guard let proofPreviewData else { return nil }
+        return UIImage(data: proofPreviewData)
+    }
     var warrantyStatus: WarrantyStatus { WarrantyStatus(rawValue: warrantyStatusRaw ?? "") ?? .none }
     var gmailLifecycleStage: GmailOrderStage {
         GmailOrderStage(rawValue: gmailLifecycleStageRaw ?? "") ?? .unknown

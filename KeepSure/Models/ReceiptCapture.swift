@@ -4,6 +4,8 @@ import UIKit
 import Vision
 
 struct ReceiptDraft: Identifiable, Equatable {
+    static let householdOwnerOptions = ["You", "Family", "Shared"]
+
     let id: UUID
     var productName: String
     var merchantName: String
@@ -22,6 +24,27 @@ struct ReceiptDraft: Identifiable, Equatable {
     var importBaseline: ReceiptImportBaseline?
     var recognizedText: String
     var pageCount: Int
+    var proofPreviewData: Data?
+    var proofDocumentData: Data?
+    var proofDocumentType: String
+    var proofDocumentName: String
+    var proofHTMLData: Data?
+
+    var returnExplanationText: String {
+        ProtectionExplanationBuilder.returnExplanation(
+            merchant: merchantName,
+            sourceType: sourceType,
+            returnDays: returnDays
+        )
+    }
+
+    var warrantyExplanationText: String {
+        ProtectionExplanationBuilder.warrantyExplanation(
+            status: warrantyStatus,
+            months: warrantyStatus == .none ? 0 : warrantyMonths,
+            evidenceNote: warrantyConfidenceNote
+        )
+    }
 
     init(
         id: UUID = UUID(),
@@ -41,13 +64,18 @@ struct ReceiptDraft: Identifiable, Equatable {
         learnedAdjustmentSummary: String = "",
         importBaseline: ReceiptImportBaseline? = nil,
         recognizedText: String,
-        pageCount: Int
+        pageCount: Int,
+        proofPreviewData: Data? = nil,
+        proofDocumentData: Data? = nil,
+        proofDocumentType: String = "",
+        proofDocumentName: String = "",
+        proofHTMLData: Data? = nil
     ) {
         self.id = id
         self.productName = productName
         self.merchantName = merchantName
         self.categoryName = categoryName
-        self.familyOwner = familyOwner
+        self.familyOwner = Self.normalizedFamilyOwner(familyOwner)
         self.sourceType = sourceType
         self.notes = notes
         self.currencyCode = currencyCode
@@ -61,6 +89,11 @@ struct ReceiptDraft: Identifiable, Equatable {
         self.importBaseline = importBaseline
         self.recognizedText = recognizedText
         self.pageCount = pageCount
+        self.proofPreviewData = proofPreviewData
+        self.proofDocumentData = proofDocumentData
+        self.proofDocumentType = proofDocumentType
+        self.proofDocumentName = proofDocumentName
+        self.proofHTMLData = proofHTMLData
     }
 
     static let emptyManual = ReceiptDraft(
@@ -77,7 +110,12 @@ struct ReceiptDraft: Identifiable, Equatable {
         learnedAdjustmentSummary: "",
         importBaseline: nil,
         recognizedText: "",
-        pageCount: 0
+        pageCount: 0,
+        proofPreviewData: nil,
+        proofDocumentData: nil,
+        proofDocumentType: "",
+        proofDocumentName: "",
+        proofHTMLData: nil
     )
 
     var windows: PurchaseWindows {
@@ -86,6 +124,14 @@ struct ReceiptDraft: Identifiable, Equatable {
             returnDays: returnDays,
             warrantyMonths: warrantyStatus == .none ? 0 : warrantyMonths
         )
+    }
+
+    var hasProofAttachment: Bool {
+        proofPreviewData != nil || proofDocumentData != nil
+    }
+
+    var hasRichHTMLProof: Bool {
+        proofHTMLData != nil
     }
 
     init(from purchase: PurchaseRecord) {
@@ -107,11 +153,16 @@ struct ReceiptDraft: Identifiable, Equatable {
             returnDays: max(returnDays, 0),
             warrantyMonths: max(warrantyMonths, 0),
             warrantyStatus: purchase.warrantyStatus,
-            warrantyConfidenceNote: purchase.warrantyStatus.reviewGuidance,
+            warrantyConfidenceNote: purchase.wrappedWarrantyExplanation,
             learnedAdjustmentSummary: "",
             importBaseline: nil,
             recognizedText: "",
-            pageCount: 0
+            pageCount: 0,
+            proofPreviewData: purchase.proofPreviewData,
+            proofDocumentData: purchase.proofDocumentData,
+            proofDocumentType: purchase.wrappedProofDocumentType,
+            proofDocumentName: purchase.wrappedProofDocumentName,
+            proofHTMLData: purchase.proofHTMLData
         )
     }
 
@@ -123,6 +174,21 @@ struct ReceiptDraft: Identifiable, Equatable {
     private static func monthsBetween(start: Date, end: Date?) -> Int {
         guard let end else { return 0 }
         return Calendar.current.dateComponents([.month], from: start, to: end).month ?? 0
+    }
+
+    static func normalizedFamilyOwner(_ value: String?) -> String {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        switch trimmed.lowercased() {
+        case "", "me", "you":
+            return "You"
+        case "family":
+            return "Family"
+        case "shared":
+            return "Shared"
+        default:
+            return "You"
+        }
     }
 }
 
@@ -182,7 +248,7 @@ enum ReceiptOCR {
         }
     }
 
-    private static func recognizeText(in image: UIImage) throws -> String {
+    nonisolated private static func recognizeText(in image: UIImage) throws -> String {
         guard let cgImage = image.cgImage else {
             throw ReceiptScanError.textRecognitionFailed
         }
@@ -202,8 +268,38 @@ enum ReceiptOCR {
     }
 }
 
+enum ReceiptProofBuilder {
+    static func packageScannedImages(_ images: [UIImage]) -> (previewData: Data?, documentData: Data?, documentType: String, documentName: String) {
+        let previewData = images.first.flatMap(makePreviewData(from:))
+        let documentData = makePDFData(from: images)
+        return (
+            previewData,
+            documentData,
+            documentData == nil ? "image" : "pdf",
+            documentData == nil ? "Scanned receipt.jpg" : "Scanned receipt.pdf"
+        )
+    }
+
+    nonisolated static func makePreviewData(from image: UIImage) -> Data? {
+        image.preparingThumbnail(of: CGSize(width: 720, height: 720))?
+            .jpegData(compressionQuality: 0.82) ?? image.jpegData(compressionQuality: 0.82)
+    }
+
+    private static func makePDFData(from images: [UIImage]) -> Data? {
+        guard !images.isEmpty else { return nil }
+
+        let document = PDFDocument()
+        for (index, image) in images.enumerated() {
+            guard let page = PDFPage(image: image) else { continue }
+            document.insert(page, at: index)
+        }
+
+        return document.pageCount > 0 ? document.dataRepresentation() : nil
+    }
+}
+
 enum ReceiptPDFOCR {
-    static func recognizeText(from url: URL) async throws -> (text: String, pageCount: Int) {
+    static func recognizeText(from url: URL) async throws -> (text: String, pageCount: Int, previewData: Data?, documentData: Data?, documentName: String) {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
@@ -223,6 +319,8 @@ enum ReceiptPDFOCR {
                         throw ReceiptScanError.emptyScan
                     }
 
+                    let documentData = try Data(contentsOf: url)
+
                     var images: [UIImage] = []
                     for index in 0..<pageCount {
                         guard let page = document.page(at: index) else { continue }
@@ -235,10 +333,18 @@ enum ReceiptPDFOCR {
                         throw ReceiptScanError.textRecognitionFailed
                     }
 
+                    let previewData = images.first.flatMap(ReceiptProofBuilder.makePreviewData(from:))
+
                     Task {
                         do {
                             let recognizedText = try await ReceiptOCR.recognizeText(from: images)
-                            continuation.resume(returning: (recognizedText, pageCount))
+                            continuation.resume(returning: (
+                                recognizedText,
+                                pageCount,
+                                previewData,
+                                documentData,
+                                url.lastPathComponent
+                            ))
                         } catch {
                             continuation.resume(throwing: error)
                         }
@@ -250,7 +356,7 @@ enum ReceiptPDFOCR {
         }
     }
 
-    private static func render(page: PDFPage) -> UIImage? {
+    static func render(page: PDFPage) -> UIImage? {
         let bounds = page.bounds(for: .mediaBox)
         let targetWidth: CGFloat = 1800
         let scale = targetWidth / max(bounds.width, 1)
@@ -736,7 +842,7 @@ enum ReceiptTextParser {
         return nil
     }
 
-    private static func cleanLine(_ line: String) -> String {
+    nonisolated private static func cleanLine(_ line: String) -> String {
         line
             .replacingOccurrences(of: "•", with: " ")
             .replacingOccurrences(of: "|", with: " ")

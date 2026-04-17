@@ -3,7 +3,6 @@ import SwiftUI
 
 struct HomeView: View {
     @Environment(\.managedObjectContext) private var viewContext
-    @EnvironmentObject private var appModeManager: AppModeManager
     @EnvironmentObject private var emailSyncManager: EmailSyncManager
     @EnvironmentObject private var notificationManager: SmartNotificationManager
     @FetchRequest(fetchRequest: PurchaseRecord.recentFetchRequest, animation: .snappy)
@@ -13,6 +12,8 @@ struct HomeView: View {
     @State private var protectedSearchText = ""
     @State private var undoReturnPurchase: PurchaseRecord?
     @State private var undoDismissTask: Task<Void, Never>?
+    @State private var proofPresentation: ReceiptProofPresentation?
+    @State private var explanationPresentation: ProtectionExplanationPresentation?
 
     private var activePurchases: [PurchaseRecord] {
         purchases.filter { !$0.isArchived }
@@ -140,16 +141,9 @@ struct HomeView: View {
     }
 
     private var familyHighlights: String {
-        if appModeManager.selectedMode == .live {
-            return hasProtectedItems
-                ? "Your protected purchases are gathering in one calm place."
-                : "Start with one purchase and your shared timeline can grow from there."
-        }
-
-        let owners = Dictionary(grouping: activePurchases, by: \.wrappedFamilyOwner)
-        let topOwner = owners.max { $0.value.count < $1.value.count }
-        guard let topOwner else { return "Start with one purchase and your household timeline will grow from there" }
-        return "\(topOwner.value.count) items added by \(topOwner.key)"
+        hasProtectedItems
+            ? "Your protected purchases are gathering in one calm place."
+            : "Start with one purchase and your shared timeline can grow from there."
     }
 
     var body: some View {
@@ -202,6 +196,20 @@ struct HomeView: View {
             }
             .environment(\.managedObjectContext, viewContext)
         }
+        .sheet(item: $proofPresentation) { proof in
+            ReceiptProofViewer(
+                previewData: proof.previewData,
+                documentData: proof.documentData,
+                documentType: proof.documentType,
+                documentName: proof.documentName,
+                htmlData: proof.htmlData
+            )
+        }
+        .sheet(item: $explanationPresentation) { explanation in
+            explanationSheet(for: explanation)
+                .presentationDragIndicator(.visible)
+                .presentationDetents([.medium, .large])
+        }
         .sheet(isPresented: $showsProtectedSummary) {
             protectedSummarySheet
                 .presentationDragIndicator(.visible)
@@ -214,6 +222,13 @@ struct HomeView: View {
                     .padding(.bottom, 24)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+        }
+        .task {
+            consumePendingNotificationRouteIfNeeded()
+        }
+        .onChange(of: notificationManager.pendingDeepLink?.id) { _, newValue in
+            guard newValue != nil else { return }
+            consumePendingNotificationRouteIfNeeded()
         }
     }
 
@@ -319,6 +334,10 @@ struct HomeView: View {
                             title: purchase.wrappedProductName,
                             subtitle: purchase.wrappedMerchantName,
                             detail: deadlineLine(prefix: "Return closes", date: purchase.returnDeadline),
+                            explanation: purchase.wrappedReturnExplanation,
+                            onExplainTap: {
+                                explanationPresentation = .returnWindow(purchase)
+                            },
                             urgency: purchase.urgency,
                             icon: icon(for: purchase.wrappedCategoryName)
                         )
@@ -347,6 +366,10 @@ struct HomeView: View {
                             date: purchase.confirmedWarrantyExpiration,
                             relative: false
                         ),
+                        explanation: purchase.wrappedWarrantyExplanation,
+                        onExplainTap: {
+                            explanationPresentation = .warrantyCoverage(purchase)
+                        },
                         urgency: PurchaseUrgency(deadline: purchase.confirmedWarrantyExpiration),
                         icon: "checkmark.shield.fill"
                     )
@@ -398,39 +421,24 @@ struct HomeView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 14) {
                         ForEach(recentPurchases.prefix(5), id: \.objectID) { purchase in
-                            Button {
-                                reviewSession = .edit(purchase)
-                            } label: {
-                            VStack(alignment: .leading, spacing: 12) {
-                                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                                    .fill(
-                                        LinearGradient(
-                                            colors: [Color.white.opacity(0.9), AppTheme.sand],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
-                                        )
+                            VStack(alignment: .center, spacing: 12) {
+                                ZStack(alignment: .topLeading) {
+                                    ReceiptProofThumbnail(
+                                        previewData: purchase.proofPreviewData,
+                                        hasProof: purchase.hasReceiptProof,
+                                        fallbackIcon: icon(for: purchase.wrappedCategoryName),
+                                        cornerRadius: 22
                                     )
-                                    .frame(height: 90)
-                                    .overlay(alignment: .topLeading) {
-                                        Text("Receipt verified")
-                                            .font(.caption.weight(.bold))
-                                            .padding(.horizontal, 12)
-                                            .padding(.vertical, 8)
-                                            .background(AppTheme.accent.opacity(0.10), in: Capsule())
-                                            .foregroundStyle(AppTheme.accent)
-                                            .padding(12)
-                                    }
-                                    .overlay(alignment: .bottomLeading) {
-                                        HStack(spacing: 8) {
-                                            Image(systemName: icon(for: purchase.wrappedCategoryName))
-                                                .font(.caption.weight(.bold))
-                                            Text(purchase.wrappedCategoryName.uppercased())
-                                                .font(.caption2.weight(.bold))
-                                                .tracking(1.0)
-                                        }
-                                        .foregroundStyle(AppTheme.secondaryAccent)
-                                        .padding(14)
-                                    }
+                                    .frame(height: 108)
+
+                                    Text(purchase.hasReceiptProof ? "Receipt on hand" : "Receipt saved")
+                                        .font(.caption.weight(.bold))
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 8)
+                                        .background(Color.white.opacity(0.88), in: Capsule())
+                                        .foregroundStyle(AppTheme.accent)
+                                        .padding(12)
+                                }
 
                                 Text(purchase.wrappedProductName)
                                     .font(.headline.weight(.semibold))
@@ -446,13 +454,46 @@ struct HomeView: View {
                                     .multilineTextAlignment(.leading)
                                     .frame(maxWidth: .infinity, alignment: .leading)
 
+                                if purchase.hasReceiptProof {
+                                    Button {
+                                        proofPresentation = ReceiptProofPresentation(purchase: purchase)
+                                    } label: {
+                                        HStack(spacing: 8) {
+                                            Image(systemName: "doc.viewfinder.fill")
+                                                .font(.caption.weight(.bold))
+                                            Text("VIEW RECEIPT")
+                                                .font(.caption2.weight(.bold))
+                                                .tracking(1.0)
+                                        }
+                                        .foregroundStyle(AppTheme.secondaryAccent)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 8)
+                                        .background(Color.white.opacity(0.62), in: Capsule())
+                                    }
+                                    .buttonStyle(.plain)
+                                } else {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: icon(for: purchase.wrappedCategoryName))
+                                            .font(.caption.weight(.bold))
+                                        Text(purchase.wrappedCategoryName.uppercased())
+                                            .font(.caption2.weight(.bold))
+                                            .tracking(1.0)
+                                    }
+                                    .foregroundStyle(AppTheme.secondaryAccent)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 8)
+                                    .background(Color.white.opacity(0.62), in: Capsule())
+                                }
+
                                 Spacer(minLength: 0)
                             }
                             .padding(16)
                             .frame(width: 224, height: 270, alignment: .topLeading)
                             .background(panelCard)
+                            .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+                            .onTapGesture {
+                                reviewSession = .edit(purchase)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -521,7 +562,6 @@ struct HomeView: View {
         }
 
         guard
-            appModeManager.selectedMode == .live,
             let firstName = emailSyncManager.connectedFirstName,
             !firstName.isEmpty
         else {
@@ -907,91 +947,106 @@ struct HomeView: View {
     }
 
     private func protectedReceiptRow(for purchase: PurchaseRecord) -> some View {
-        Button {
-            showsProtectedSummary = false
-            reviewSession = .edit(purchase)
-        } label: {
-            HStack(alignment: .top, spacing: 14) {
-                Image(systemName: icon(for: purchase.wrappedCategoryName))
-                    .font(.headline.weight(.bold))
-                    .foregroundStyle(AppTheme.accent)
-                    .frame(width: 42, height: 42)
-                    .background(AppTheme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        HStack(alignment: .top, spacing: 14) {
+            ReceiptProofThumbnail(
+                previewData: purchase.proofPreviewData,
+                hasProof: purchase.hasReceiptProof,
+                fallbackIcon: icon(for: purchase.wrappedCategoryName),
+                cornerRadius: 14
+            )
+            .frame(width: 56, height: 56)
 
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(alignment: .top, spacing: 8) {
-                        Text(purchase.wrappedProductName)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(AppTheme.ink)
-                            .multilineTextAlignment(.leading)
-                            .lineLimit(2)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .top, spacing: 8) {
+                    Text(purchase.wrappedProductName)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppTheme.ink)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(2)
 
-                        Spacer(minLength: 8)
+                    Spacer(minLength: 8)
 
-                        if purchase.needsReview {
-                            Text("Review")
-                                .font(.caption2.weight(.bold))
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 6)
-                                .background(AppTheme.accent.opacity(0.10), in: Capsule())
-                                .foregroundStyle(AppTheme.accent)
-                        }
+                    if purchase.needsReview {
+                        Text("Review")
+                            .font(.caption2.weight(.bold))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .background(AppTheme.accent.opacity(0.10), in: Capsule())
+                            .foregroundStyle(AppTheme.accent)
                     }
+                }
 
-                    Text(purchase.wrappedMerchantName)
-                        .font(.subheadline)
-                        .foregroundStyle(AppTheme.secondaryAccent.opacity(0.76))
-                        .lineLimit(1)
+                Text(purchase.wrappedMerchantName)
+                    .font(.subheadline)
+                    .foregroundStyle(AppTheme.secondaryAccent.opacity(0.76))
+                    .lineLimit(1)
 
-                    HStack(spacing: 8) {
-                        Text(purchase.wrappedPurchaseDate.formatted(date: .abbreviated, time: .omitted))
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(AppTheme.secondaryAccent.opacity(0.72))
+                HStack(spacing: 8) {
+                    Text(purchase.wrappedPurchaseDate.formatted(date: .abbreviated, time: .omitted))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppTheme.secondaryAccent.opacity(0.72))
 
+                    Text("•")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(AppTheme.secondaryAccent.opacity(0.4))
+
+                    Text(purchase.price.formatted(.currency(code: purchase.wrappedCurrencyCode)))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppTheme.secondaryAccent.opacity(0.72))
+
+                    if purchase.hasVisibleWarranty {
                         Text("•")
                             .font(.caption.weight(.bold))
                             .foregroundStyle(AppTheme.secondaryAccent.opacity(0.4))
 
-                        Text(purchase.price.formatted(.currency(code: purchase.wrappedCurrencyCode)))
+                        Text("Warranty")
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(AppTheme.secondaryAccent.opacity(0.72))
-
-                        if purchase.hasVisibleWarranty {
-                            Text("•")
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(AppTheme.secondaryAccent.opacity(0.4))
-
-                            Text("Warranty")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(Color.green.opacity(0.8))
-                        }
-                    }
-
-                    if purchase.needsReview {
-                        Text(purchase.primaryReviewReason)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(AppTheme.accent)
-                            .lineLimit(2)
+                            .foregroundStyle(Color.green.opacity(0.8))
                     }
                 }
 
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(AppTheme.secondaryAccent.opacity(0.5))
-                    .padding(.top, 4)
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(AppTheme.elevatedPanelFill)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 22, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.72), lineWidth: 1)
+                if purchase.hasReceiptProof {
+                    Button {
+                        proofPresentation = ReceiptProofPresentation(purchase: purchase)
+                    } label: {
+                        Text("View original receipt")
+                            .font(.caption.weight(.bold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .background(AppTheme.accent.opacity(0.10), in: Capsule())
+                            .foregroundStyle(AppTheme.accent)
                     }
-            )
+                    .buttonStyle(.plain)
+                }
+
+                if purchase.needsReview {
+                    Text(purchase.primaryReviewReason)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppTheme.accent)
+                        .lineLimit(2)
+                }
+            }
+
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(AppTheme.secondaryAccent.opacity(0.5))
+                .padding(.top, 4)
         }
-        .buttonStyle(.plain)
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(AppTheme.elevatedPanelFill)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.72), lineWidth: 1)
+                }
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .onTapGesture {
+            showsProtectedSummary = false
+            reviewSession = .edit(purchase)
+        }
     }
 
     private func warrantyDetailPrefix(for purchase: PurchaseRecord) -> String {
@@ -1056,6 +1111,32 @@ struct HomeView: View {
                 undoReturnPurchase = nil
             }
         }
+    }
+
+    private func consumePendingNotificationRouteIfNeeded() {
+        guard let route = notificationManager.consumePendingDeepLink(),
+              let purchase = purchaseForNotificationRoute(route) else { return }
+
+        switch route.destination {
+        case .returnWindow:
+            explanationPresentation = .reminderReturnWindow(purchase)
+        case .warrantyCoverage:
+            explanationPresentation = .reminderWarrantyCoverage(purchase)
+        case .review:
+            reviewSession = .edit(purchase)
+        }
+    }
+
+    private func purchaseForNotificationRoute(_ route: NotificationDeepLink) -> PurchaseRecord? {
+        guard let url = URL(string: route.purchaseURI),
+              let coordinator = viewContext.persistentStoreCoordinator,
+              let objectID = coordinator.managedObjectID(forURIRepresentation: url),
+              let purchase = try? viewContext.existingObject(with: objectID) as? PurchaseRecord
+        else {
+            return nil
+        }
+
+        return purchase
     }
 
     private func undoToast(for purchase: PurchaseRecord) -> some View {
@@ -1156,7 +1237,15 @@ struct HomeView: View {
         )
     }
 
-    private func timelineCard(title: String, subtitle: String, detail: String, urgency: PurchaseUrgency, icon: String) -> some View {
+    private func timelineCard(
+        title: String,
+        subtitle: String,
+        detail: String,
+        explanation: String? = nil,
+        onExplainTap: (() -> Void)? = nil,
+        urgency: PurchaseUrgency,
+        icon: String
+    ) -> some View {
         VStack (alignment: .leading){
 
             VStack(alignment: .leading, spacing: 6) {
@@ -1195,11 +1284,181 @@ struct HomeView: View {
                         .background(color(for: urgency).opacity(0.10), in: Capsule())
                         .foregroundStyle(color(for: urgency))
                 }.frame(maxWidth: .infinity, alignment: .init(horizontal: .leading, vertical: .center))
-                
+
+                if let explanation, !explanation.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(explanation)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(AppTheme.secondaryAccent.opacity(0.74))
+                            .lineLimit(2)
+
+                        if let onExplainTap {
+                            Button(action: onExplainTap) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "questionmark.circle.fill")
+                                        .font(.caption.weight(.bold))
+                                    Text("Why this?")
+                                        .font(.caption.weight(.bold))
+                                }
+                                .foregroundStyle(AppTheme.accent)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .background(AppTheme.accent.opacity(0.10), in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.top, 2)
+                }
             }.frame(maxWidth: .infinity, alignment: .init(horizontal: .leading, vertical: .center))
         }
         .padding(16)
         .background(panelCard)
+    }
+
+    @ViewBuilder
+    private func explanationSheet(for explanation: ProtectionExplanationPresentation) -> some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(explanation.eyebrow.uppercased())
+                            .font(.caption.weight(.bold))
+                            .tracking(1.2)
+                            .foregroundStyle(AppTheme.accent)
+
+                        Text(explanation.title)
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(AppTheme.ink)
+
+                        Text(explanation.subtitle)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(AppTheme.secondaryAccent.opacity(0.78))
+                    }
+
+                    if explanation.isFromReminder {
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: "bell.badge.fill")
+                                .font(.headline.weight(.bold))
+                                .foregroundStyle(AppTheme.accent)
+                                .frame(width: 42, height: 42)
+                                .background(AppTheme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(explanation.reminderHeadline)
+                                    .font(.headline.weight(.semibold))
+                                    .foregroundStyle(AppTheme.ink)
+
+                                Text(explanation.reminderMessage)
+                                    .font(.subheadline)
+                                    .foregroundStyle(AppTheme.secondaryAccent.opacity(0.82))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .padding(16)
+                        .background(panelCard)
+                    }
+
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: explanation.icon)
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.accent)
+                            .frame(width: 42, height: 42)
+                            .background(AppTheme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                        Text(explanation.fullExplanation)
+                            .font(.body)
+                            .foregroundStyle(AppTheme.secondaryAccent.opacity(0.86))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(16)
+                    .background(panelCard)
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        sectionTitle("What Keep Sure is using")
+
+                        summaryPill(title: "Purchase date", value: explanation.purchase.wrappedPurchaseDate.formatted(date: .abbreviated, time: .omitted))
+
+                        if let deadlineValue = explanation.deadlineValue {
+                            summaryPill(title: explanation.deadlineTitle, value: deadlineValue)
+                        }
+
+                        if let sourceValue = explanation.sourceValue {
+                            summaryPill(title: explanation.sourceTitle, value: sourceValue)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        sectionTitle(explanation.isFromReminder ? "Take action now" : "Next steps")
+
+                        VStack(spacing: 12) {
+                            if explanation.showsMarkDoneAction {
+                                Button {
+                                    markReturnHandled(for: explanation.purchase)
+                                    explanationPresentation = nil
+                                } label: {
+                                    Text("Mark return done")
+                                        .font(.subheadline.weight(.bold))
+                                        .foregroundStyle(.white)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 14)
+                                        .background(AppTheme.accent, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                                }
+                                .buttonStyle(.plain)
+                            }
+
+                            HStack(spacing: 12) {
+                                Button {
+                                    reviewSession = .edit(explanation.purchase)
+                                    explanationPresentation = nil
+                                } label: {
+                                    Text(explanation.reviewButtonTitle)
+                                        .font(.subheadline.weight(.bold))
+                                        .foregroundStyle(explanation.showsMarkDoneAction ? AppTheme.accent : .white)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 14)
+                                        .background(
+                                            explanation.showsMarkDoneAction
+                                            ? AppTheme.accent.opacity(0.10)
+                                            : AppTheme.accent,
+                                            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                        )
+                                }
+                                .buttonStyle(.plain)
+
+                                if explanation.purchase.hasReceiptProof {
+                                    Button {
+                                        proofPresentation = ReceiptProofPresentation(purchase: explanation.purchase)
+                                        explanationPresentation = nil
+                                    } label: {
+                                        Text(explanation.proofButtonTitle)
+                                            .font(.subheadline.weight(.bold))
+                                            .foregroundStyle(AppTheme.accent)
+                                            .frame(maxWidth: .infinity)
+                                            .padding(.vertical, 14)
+                                            .background(AppTheme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(20)
+            }
+            .scrollIndicators(.hidden)
+            .background(AppTheme.homeBackground)
+            .navigationTitle("Why Keep Sure thinks this")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") {
+                        explanationPresentation = nil
+                    }
+                    .foregroundStyle(AppTheme.accent)
+                }
+            }
+        }
     }
 
     private func deadlineLine(prefix: String, date: Date?, relative: Bool = true) -> String {
@@ -1229,6 +1488,158 @@ struct HomeView: View {
         case "beauty": "sparkles"
         case "travel": "suitcase.rolling.fill"
         default: "shippingbox.fill"
+        }
+    }
+}
+
+private struct ProtectionExplanationPresentation: Identifiable {
+    enum Kind {
+        case returnWindow
+        case warrantyCoverage
+    }
+
+    enum Source {
+        case card
+        case reminder
+    }
+
+    let id = UUID()
+    let purchase: PurchaseRecord
+    let kind: Kind
+    let source: Source
+
+    static func returnWindow(_ purchase: PurchaseRecord) -> ProtectionExplanationPresentation {
+        .init(purchase: purchase, kind: .returnWindow, source: .card)
+    }
+
+    static func warrantyCoverage(_ purchase: PurchaseRecord) -> ProtectionExplanationPresentation {
+        .init(purchase: purchase, kind: .warrantyCoverage, source: .card)
+    }
+
+    static func reminderReturnWindow(_ purchase: PurchaseRecord) -> ProtectionExplanationPresentation {
+        .init(purchase: purchase, kind: .returnWindow, source: .reminder)
+    }
+
+    static func reminderWarrantyCoverage(_ purchase: PurchaseRecord) -> ProtectionExplanationPresentation {
+        .init(purchase: purchase, kind: .warrantyCoverage, source: .reminder)
+    }
+
+    var eyebrow: String {
+        switch kind {
+        case .returnWindow: "Return window"
+        case .warrantyCoverage: "Warranty coverage"
+        }
+    }
+
+    var title: String {
+        switch kind {
+        case .returnWindow:
+            return purchase.wrappedProductName
+        case .warrantyCoverage:
+            return purchase.wrappedProductName
+        }
+    }
+
+    var subtitle: String {
+        switch kind {
+        case .returnWindow:
+            return "\(purchase.wrappedMerchantName) • \(purchase.wrappedSourceType)"
+        case .warrantyCoverage:
+            return "\(purchase.wrappedMerchantName) • \(purchase.wrappedFamilyOwner)"
+        }
+    }
+
+    var isFromReminder: Bool {
+        source == .reminder
+    }
+
+    var reminderHeadline: String {
+        switch kind {
+        case .returnWindow:
+            return "Your return window is getting close"
+        case .warrantyCoverage:
+            return "Your warranty is worth checking now"
+        }
+    }
+
+    var reminderMessage: String {
+        switch kind {
+        case .returnWindow:
+            return "If you already started the return, you can clear it here. Otherwise, open the purchase and keep the proof close by."
+        case .warrantyCoverage:
+            return "This is a good moment to review the coverage details and keep your original proof nearby in case you need to act."
+        }
+    }
+
+    var icon: String {
+        switch kind {
+        case .returnWindow:
+            return "arrow.uturn.backward.circle.fill"
+        case .warrantyCoverage:
+            return purchase.needsWarrantyConfirmation ? "sparkles" : "checkmark.shield.fill"
+        }
+    }
+
+    var fullExplanation: String {
+        switch kind {
+        case .returnWindow:
+            return purchase.wrappedReturnExplanation
+        case .warrantyCoverage:
+            return purchase.wrappedWarrantyExplanation
+        }
+    }
+
+    var deadlineTitle: String {
+        switch kind {
+        case .returnWindow: "Return deadline"
+        case .warrantyCoverage: "Coverage ends"
+        }
+    }
+
+    var deadlineValue: String? {
+        switch kind {
+        case .returnWindow:
+            return purchase.returnDeadline?.formatted(date: .abbreviated, time: .omitted)
+        case .warrantyCoverage:
+            return purchase.warrantyExpiration?.formatted(date: .abbreviated, time: .omitted)
+        }
+    }
+
+    var sourceTitle: String {
+        switch kind {
+        case .returnWindow: "Tracked from"
+        case .warrantyCoverage: "Coverage status"
+        }
+    }
+
+    var sourceValue: String? {
+        switch kind {
+        case .returnWindow:
+            return purchase.wrappedSourceType
+        case .warrantyCoverage:
+            return purchase.warrantyStatus.title
+        }
+    }
+
+    var showsMarkDoneAction: Bool {
+        kind == .returnWindow && !purchase.isReturnHandled
+    }
+
+    var reviewButtonTitle: String {
+        switch kind {
+        case .returnWindow:
+            return "Review return"
+        case .warrantyCoverage:
+            return "Review coverage"
+        }
+    }
+
+    var proofButtonTitle: String {
+        switch kind {
+        case .returnWindow:
+            return "View proof"
+        case .warrantyCoverage:
+            return "Open proof"
         }
     }
 }

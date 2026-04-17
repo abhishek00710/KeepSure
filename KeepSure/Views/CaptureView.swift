@@ -5,7 +5,6 @@ import VisionKit
 
 struct CaptureView: View {
     @EnvironmentObject private var emailSyncManager: EmailSyncManager
-    @EnvironmentObject private var appModeManager: AppModeManager
     @Environment(\.managedObjectContext) private var viewContext
     @FetchRequest(fetchRequest: PurchaseRecord.recentFetchRequest, animation: .snappy)
     private var purchases: FetchedResults<PurchaseRecord>
@@ -16,6 +15,7 @@ struct CaptureView: View {
     @State private var reviewSession: ReviewSession?
     @State private var latestDraftPreview: ReceiptDraft?
     @State private var scanErrorMessage: String?
+    @State private var proofPresentation: ReceiptProofPresentation?
 
     private var hasPurchases: Bool {
         !purchases.isEmpty
@@ -62,6 +62,15 @@ struct CaptureView: View {
                 reviewSession = nil
             }
             .environment(\.managedObjectContext, viewContext)
+        }
+        .sheet(item: $proofPresentation) { proof in
+            ReceiptProofViewer(
+                previewData: proof.previewData,
+                documentData: proof.documentData,
+                documentType: proof.documentType,
+                documentName: proof.documentName,
+                htmlData: proof.htmlData
+            )
         }
         .overlay {
             if isProcessingScan {
@@ -187,19 +196,13 @@ struct CaptureView: View {
             HStack(spacing: 12) {
                 actionButton(title: "Import PDF", subtitle: "Bring in a saved receipt PDF", systemImage: "doc.fill", action: startPDFImport)
                 actionButton(
-                    title: appModeManager.selectedMode == .live
-                        ? (emailSyncManager.isConnected ? "Sync Gmail" : "Connect Gmail")
-                        : "Live mode only",
-                    subtitle: appModeManager.selectedMode == .live
-                        ? (emailSyncManager.isConnected
-                            ? "Import recent purchase emails"
-                            : (emailSyncManager.hasUsableConfiguration ? "One-time permission, then automatic imports" : "Gmail sync is unavailable in this build"))
-                        : "Switch to Live mode to import Gmail purchases",
+                    title: emailSyncManager.isConnected ? "Sync Gmail" : "Connect Gmail",
+                    subtitle: emailSyncManager.isConnected
+                        ? "Import recent purchase emails"
+                        : (emailSyncManager.hasUsableConfiguration ? "One-time permission, then automatic imports" : "Gmail sync is unavailable in this build"),
                     systemImage: "envelope.badge.fill",
                     action: {
-                        if appModeManager.selectedMode != .live {
-                            scanErrorMessage = "Switch to Live mode in Profile before importing purchases from Gmail."
-                        } else if emailSyncManager.hasUsableConfiguration {
+                        if emailSyncManager.hasUsableConfiguration {
                             Task {
                                 await emailSyncManager.connectOrSync()
                             }
@@ -296,6 +299,10 @@ struct CaptureView: View {
                         .foregroundStyle(AppTheme.success)
                 }
 
+                if let preview {
+                    proofPreviewBlock(for: preview)
+                }
+
                 VStack(alignment: .leading, spacing: 8) {
                     Text(preview?.productName.isEmpty == false ? preview?.productName ?? "" : "Scan a receipt to prefill this review")
                         .font(.title3.weight(.bold))
@@ -359,14 +366,14 @@ struct CaptureView: View {
                     } label: {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(alignment: .top) {
-                            Circle()
-                                .fill(AppTheme.accent.opacity(0.12))
-                                .frame(width: 48, height: 48)
-                                .overlay {
-                                    Image(systemName: purchase.wrappedSourceType == "Email" ? "envelope.fill" : "doc.text.viewfinder")
-                                        .font(.headline.weight(.bold))
-                                        .foregroundStyle(AppTheme.accent)
-                                }
+                            ReceiptProofThumbnail(
+                                previewData: purchase.proofPreviewData,
+                                hasProof: purchase.hasReceiptProof,
+                                fallbackIcon: purchase.wrappedSourceType == "Email" ? "envelope.fill" : "doc.text.viewfinder",
+                                cornerRadius: 16
+                            )
+                            .frame(width: 58, height: 58)
+
                             Text(purchase.wrappedProductName)
                                 .font(.headline.weight(.semibold))
                                 .foregroundStyle(AppTheme.ink)
@@ -532,6 +539,49 @@ struct CaptureView: View {
         isImportingPDF = true
     }
 
+    private func proofPreviewBlock(for draft: ReceiptDraft) -> some View {
+        Button {
+            proofPresentation = ReceiptProofPresentation(draft: draft)
+        } label: {
+            HStack(spacing: 14) {
+                ReceiptProofThumbnail(
+                    previewData: draft.proofPreviewData,
+                    hasProof: draft.hasProofAttachment,
+                    cornerRadius: 20
+                )
+                .frame(width: 112, height: 120)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Original proof")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppTheme.ink)
+
+                    Text(draft.proofDocumentName.isEmpty ? "Stored with this review" : draft.proofDocumentName)
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(AppTheme.secondaryAccent.opacity(0.78))
+                        .lineLimit(2)
+
+                    Text("Open the actual receipt so the parsed fields never feel disconnected from the real proof.")
+                        .font(.footnote)
+                        .foregroundStyle(AppTheme.secondaryAccent.opacity(0.72))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Text("View receipt")
+                        .font(.footnote.weight(.bold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(AppTheme.accent.opacity(0.10), in: Capsule())
+                        .foregroundStyle(AppTheme.accent)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(14)
+            .background(Color.white.opacity(0.42), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
     private func handleScannedPages(_ images: [UIImage]) {
         isPresentingScanner = false
         isProcessingScan = true
@@ -539,7 +589,12 @@ struct CaptureView: View {
         Task {
             do {
                 let recognizedText = try await ReceiptOCR.recognizeText(from: images)
-                let draft = ReceiptTextParser.draft(from: recognizedText, pageCount: images.count)
+                let proof = ReceiptProofBuilder.packageScannedImages(images)
+                var draft = ReceiptTextParser.draft(from: recognizedText, pageCount: images.count)
+                draft.proofPreviewData = proof.previewData
+                draft.proofDocumentData = proof.documentData
+                draft.proofDocumentType = proof.documentType
+                draft.proofDocumentName = proof.documentName
                 await MainActor.run {
                     isProcessingScan = false
                     latestDraftPreview = draft
@@ -563,7 +618,11 @@ struct CaptureView: View {
             Task {
                 do {
                     let imported = try await ReceiptPDFOCR.recognizeText(from: url)
-                    let draft = ReceiptTextParser.draft(from: imported.text, pageCount: imported.pageCount)
+                    var draft = ReceiptTextParser.draft(from: imported.text, pageCount: imported.pageCount)
+                    draft.proofPreviewData = imported.previewData
+                    draft.proofDocumentData = imported.documentData
+                    draft.proofDocumentType = "pdf"
+                    draft.proofDocumentName = imported.documentName
                     await MainActor.run {
                         isProcessingScan = false
                         latestDraftPreview = draft
@@ -592,6 +651,7 @@ struct ReceiptReviewView: View {
     @State private var showsSourceText = false
     @State private var showsLearningDetails = false
     @State private var saveErrorMessage: String?
+    @State private var proofPresentation: ReceiptProofPresentation?
     private let purchaseToEdit: PurchaseRecord?
     private let initialDraft: ReceiptDraft
 
@@ -612,6 +672,7 @@ struct ReceiptReviewView: View {
                     reviewAssistCard
                     essentialsCard
                     coverageCard
+                    proofCard
                     sourceCard
                 }
                 .padding(20)
@@ -638,6 +699,15 @@ struct ReceiptReviewView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(saveErrorMessage ?? "")
+            }
+            .sheet(item: $proofPresentation) { proof in
+                ReceiptProofViewer(
+                    previewData: proof.previewData,
+                    documentData: proof.documentData,
+                    documentType: proof.documentType,
+                    documentName: proof.documentName,
+                    htmlData: proof.htmlData
+                )
             }
         }
     }
@@ -821,7 +891,7 @@ struct ReceiptReviewView: View {
                 .tint(AppTheme.accent)
 
                 Picker("Household owner", selection: $draft.familyOwner) {
-                    ForEach(["Me", "Family", "Shared"], id: \.self, content: Text.init)
+                    ForEach(ReceiptDraft.householdOwnerOptions, id: \.self, content: Text.init)
                 }
                 .tint(AppTheme.accent)
 
@@ -882,6 +952,82 @@ struct ReceiptReviewView: View {
             summaryRow(title: "Return deadline", value: draft.windows.returnDeadline?.formatted(date: .abbreviated, time: .omitted) ?? "None")
             summaryRow(title: "Warranty status", value: draft.warrantyStatus.title)
             summaryRow(title: "Warranty ends", value: draft.windows.warrantyExpiration?.formatted(date: .abbreviated, time: .omitted) ?? "None")
+
+            explanationCard(
+                title: "Why this return window is tracked",
+                text: draft.returnExplanationText,
+                icon: "arrow.uturn.backward.circle.fill"
+            )
+
+            explanationCard(
+                title: "Why this warranty is tracked",
+                text: draft.warrantyExplanationText,
+                icon: warrantyGuidanceIcon
+            )
+        }
+        .padding(20)
+        .background(panelCard)
+    }
+
+    private var proofCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            sectionTitle("Original proof")
+
+            if draft.hasProofAttachment {
+                Button {
+                    proofPresentation = ReceiptProofPresentation(draft: draft)
+                } label: {
+                    HStack(spacing: 14) {
+                        ReceiptProofThumbnail(
+                            previewData: draft.proofPreviewData,
+                            hasProof: true,
+                            cornerRadius: 20
+                        )
+                        .frame(width: 120, height: 144)
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(draft.proofDocumentName.isEmpty ? "Saved receipt" : draft.proofDocumentName)
+                                .font(.headline.weight(.semibold))
+                                .foregroundStyle(AppTheme.ink)
+                                .lineLimit(2)
+
+                            Text("Open the exact receipt or PDF alongside the parsed details whenever you want a confidence check.")
+                                .font(.subheadline)
+                                .foregroundStyle(AppTheme.secondaryAccent.opacity(0.78))
+                                .fixedSize(horizontal: false, vertical: true)
+
+                            Text("View original proof")
+                                .font(.footnote.weight(.bold))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(AppTheme.accent.opacity(0.10), in: Capsule())
+                                .foregroundStyle(AppTheme.accent)
+                        }
+
+                        Spacer(minLength: 0)
+                    }
+                    .padding(14)
+                    .background(Color.white.opacity(0.48), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            } else {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: draft.sourceType == "Email" ? "envelope.open.fill" : "doc.text.magnifyingglass")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(AppTheme.accent)
+                        .frame(width: 38, height: 38)
+                        .background(AppTheme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                    Text(draft.sourceType == "Email"
+                        ? "This purchase came from Gmail parsing, so Keep Sure has the extracted order details but not a stored receipt image yet."
+                        : "Keep Sure saved the parsed details for this purchase, but there is no stored receipt image or PDF attached yet.")
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.secondaryAccent.opacity(0.8))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(14)
+                .background(Color.white.opacity(0.48), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            }
         }
         .padding(20)
         .background(panelCard)
@@ -889,7 +1035,7 @@ struct ReceiptReviewView: View {
 
     private var sourceCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            sectionTitle("OCR source")
+            sectionTitle("Imported text")
 
             if draft.recognizedText.isEmpty {
                 TextField("Optional notes", text: $draft.notes, axis: .vertical)
@@ -941,6 +1087,30 @@ struct ReceiptReviewView: View {
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(AppTheme.ink)
         }
+    }
+
+    private func explanationCard(title: String, text: String, icon: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.accent)
+                .frame(width: 38, height: 38)
+                .background(AppTheme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.footnote.weight(.bold))
+                    .tracking(0.6)
+                    .foregroundStyle(AppTheme.accent)
+
+                Text(text)
+                    .font(.subheadline)
+                    .foregroundStyle(AppTheme.secondaryAccent.opacity(0.82))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.48), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private func textField(_ title: String, text: Binding<String>) -> some View {
@@ -1034,7 +1204,7 @@ struct ReceiptReviewView: View {
     private var warrantyGuidanceIcon: String {
         switch draft.warrantyStatus {
         case .none:
-            return "questionmark.shield"
+            return "shield"
         case .estimated:
             return "sparkles"
         case .confirmed:
@@ -1086,6 +1256,8 @@ struct ReceiptReviewView: View {
         record.returnDeadline = windows.returnDeadline
         record.warrantyExpiration = windows.warrantyExpiration
         record.warrantyStatusRaw = draft.warrantyStatus.rawValue
+        record.returnExplanation = draft.returnExplanationText
+        record.warrantyExplanation = draft.warrantyExplanationText
         if record.createdAt == nil {
             record.createdAt = .now
         }
@@ -1093,6 +1265,11 @@ struct ReceiptReviewView: View {
         record.price = draft.price
         record.isArchived = false
         record.returnCompleted = false
+        record.proofPreviewData = draft.proofPreviewData
+        record.proofDocumentData = draft.proofDocumentData
+        record.proofDocumentType = draft.proofDocumentType.isEmpty ? nil : draft.proofDocumentType
+        record.proofDocumentName = draft.proofDocumentName.isEmpty ? nil : draft.proofDocumentName
+        record.proofHTMLData = draft.proofHTMLData
 
         do {
             try viewContext.save()

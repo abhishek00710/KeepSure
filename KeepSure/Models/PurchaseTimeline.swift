@@ -52,6 +52,74 @@ struct PurchaseWindows: Equatable {
     }
 }
 
+enum ProtectionExplanationBuilder {
+    static func returnExplanation(
+        merchant: String,
+        sourceType: String,
+        returnDays: Int
+    ) -> String {
+        guard returnDays > 0 else {
+            return "Keep Sure is not tracking a return window for this purchase right now."
+        }
+
+        let merchantName = merchant.trimmingCharacters(in: .whitespacesAndNewlines)
+        let merchantReference = merchantName.isEmpty || merchantName == "Unknown merchant"
+            ? "this purchase"
+            : merchantName
+
+        switch sourceType {
+        case "Manual":
+            return "Keep Sure is tracking the \(returnDays)-day return window you entered manually and counting it from the purchase date."
+        case "Email":
+            return "Keep Sure is tracking a \(returnDays)-day return window for \(merchantReference) based on the connected retailer profile and counting it from the purchase date in the order email."
+        case "Scan":
+            return "Keep Sure is tracking a \(returnDays)-day return window for \(merchantReference) using the scanned receipt date and the retailer policy it recognized."
+        default:
+            return "Keep Sure is tracking a \(returnDays)-day return window for \(merchantReference) from the purchase date. Review it if the store policy says something different."
+        }
+    }
+
+    static func warrantyExplanation(
+        status: WarrantyStatus,
+        months: Int,
+        evidenceNote: String
+    ) -> String {
+        let trimmedNote = evidenceNote.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch status {
+        case .none:
+            if !trimmedNote.isEmpty {
+                return trimmedNote
+            }
+            return "Keep Sure has not found dependable warranty proof yet, so no warranty reminders are being scheduled."
+        case .estimated:
+            if !trimmedNote.isEmpty {
+                if months > 0 {
+                    return "\(trimmedNote) Keep Sure is holding a \(months)-month estimate from the purchase date until you confirm it."
+                }
+                return "\(trimmedNote) Keep Sure is keeping this as an estimate until you confirm it."
+            }
+
+            if months > 0 {
+                return "Keep Sure found partial warranty clues and is holding a \(months)-month estimate from the purchase date until you confirm it."
+            }
+            return "Keep Sure found partial warranty clues, but the coverage still needs confirmation before reminders should be trusted."
+        case .confirmed:
+            if !trimmedNote.isEmpty {
+                if months > 0 {
+                    return "\(trimmedNote) Keep Sure is tracking \(months) months of confirmed coverage from the purchase date."
+                }
+                return trimmedNote
+            }
+
+            if months > 0 {
+                return "Keep Sure has enough direct warranty proof to track \(months) months of confirmed coverage from the purchase date."
+            }
+            return "Keep Sure has enough direct warranty proof to track this confirmed coverage confidently."
+        }
+    }
+}
+
 enum PurchaseUrgency {
     case critical
     case soon
