@@ -1,5 +1,6 @@
 import CoreData
 import SwiftUI
+import UniformTypeIdentifiers
 import VisionKit
 
 struct CaptureView: View {
@@ -10,8 +11,9 @@ struct CaptureView: View {
     private var purchases: FetchedResults<PurchaseRecord>
 
     @State private var isPresentingScanner = false
+    @State private var isImportingPDF = false
     @State private var isProcessingScan = false
-    @State private var reviewDraft: ReceiptDraft?
+    @State private var reviewSession: ReviewSession?
     @State private var latestDraftPreview: ReceiptDraft?
     @State private var scanErrorMessage: String?
 
@@ -47,10 +49,17 @@ struct CaptureView: View {
             )
             .ignoresSafeArea()
         }
-        .sheet(item: $reviewDraft) { draft in
-            ReceiptReviewView(initialDraft: draft) { savedDraft in
+        .fileImporter(
+            isPresented: $isImportingPDF,
+            allowedContentTypes: [.pdf],
+            allowsMultipleSelection: false
+        ) { result in
+            handlePDFImport(result)
+        }
+        .sheet(item: $reviewSession) { session in
+            ReceiptReviewView(initialDraft: session.draft, purchaseToEdit: session.purchaseToEdit) { savedDraft in
                 latestDraftPreview = savedDraft
-                reviewDraft = nil
+                reviewSession = nil
             }
             .environment(\.managedObjectContext, viewContext)
         }
@@ -176,7 +185,7 @@ struct CaptureView: View {
             sectionTitle("More ways to add")
 
             HStack(spacing: 12) {
-                actionButton(title: "Import PDF", subtitle: "Available next", systemImage: "doc.fill", action: startScan)
+                actionButton(title: "Import PDF", subtitle: "Bring in a saved receipt PDF", systemImage: "doc.fill", action: startPDFImport)
                 actionButton(
                     title: appModeManager.selectedMode == .live
                         ? (emailSyncManager.isConnected ? "Sync Gmail" : "Connect Gmail")
@@ -227,10 +236,10 @@ struct CaptureView: View {
 
             HStack(spacing: 12) {
                 actionButton(title: "Add manually", subtitle: "Open a blank review sheet", systemImage: "square.and.pencil", action: {
-                    reviewDraft = ReceiptDraft.emptyManual
+                    reviewSession = .create(from: .emptyManual)
                 })
                 actionButton(title: "Share to family", subtitle: "Assign during review", systemImage: "person.2.fill", action: {
-                    reviewDraft = ReceiptDraft.emptyManual
+                    reviewSession = .create(from: .emptyManual)
                 })
             }.fixedSize(horizontal: false, vertical: true)
         }
@@ -248,14 +257,19 @@ struct CaptureView: View {
                 Text(title)
                     .font(.headline.weight(.semibold))
                     .foregroundStyle(AppTheme.ink)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
                 Text(subtitle)
                     .font(.subheadline)
                     .foregroundStyle(AppTheme.secondaryAccent.opacity(0.72))
-                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Spacer(minLength: 0)
             }
             .padding(18)
-            .frame(maxWidth: .infinity, minHeight: 170, maxHeight: 170, alignment: .topLeading)
+            .frame(maxWidth: .infinity, minHeight: 182, maxHeight: 182, alignment: .topLeading)
             .background(panelCard)
         }
         .buttonStyle(.plain)
@@ -274,6 +288,7 @@ struct CaptureView: View {
                         .foregroundStyle(AppTheme.ink)
                     Spacer()
                     Text(preview == nil ? "Ready when you are" : "Parsed")
+                        .multilineTextAlignment(.center)
                         .font(.caption.weight(.bold))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 7)
@@ -297,17 +312,29 @@ struct CaptureView: View {
                 }
 
                 HStack(spacing: 10) {
-                    previewStatusCard(
-                        title: "Returns",
-                        value: preview.map { "\($0.returnDays) days" } ?? "Ready",
+                    heroFeatureCard(
                         icon: "arrow.uturn.backward.circle.fill",
-                        color: AppTheme.warning
+                        title: "Returns",
+                        subtitle: preview.map { "\($0.returnDays) days" } ?? "Ready"
+                    ).background(
+                        RoundedRectangle(cornerRadius: 30, style: .continuous)
+                            .fill(AppTheme.dashboardGradient)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 30, style: .continuous)
+                                    .strokeBorder(Color.white.opacity(0.55), lineWidth: 1)
+                            }
                     )
-                    previewStatusCard(
-                        title: "Warranty",
-                        value: preview.map { "\($0.warrantyMonths) months" } ?? "Estimate ready",
+                    heroFeatureCard(
                         icon: "checkmark.shield.fill",
-                        color: AppTheme.accent
+                        title: "Warranty",
+                        subtitle: preview.map { warrantyPreviewValue(for: $0) } ?? "Needs confirmation"
+                    ).background(
+                        RoundedRectangle(cornerRadius: 30, style: .continuous)
+                            .fill(AppTheme.dashboardGradient)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 30, style: .continuous)
+                                    .strokeBorder(Color.white.opacity(0.55), lineWidth: 1)
+                            }
                     )
                 }
             }
@@ -327,6 +354,9 @@ struct CaptureView: View {
                 )
             } else {
                 ForEach(purchases.prefix(4), id: \.objectID) { purchase in
+                    Button {
+                        reviewSession = .edit(purchase)
+                    } label: {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(alignment: .top) {
                             Circle()
@@ -358,6 +388,8 @@ struct CaptureView: View {
                     }
                     .padding(18)
                     .background(panelCard)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
@@ -402,27 +434,23 @@ struct CaptureView: View {
     }
 
     private func previewStatusCard(title: String, value: String, icon: String, color: Color) -> some View {
-        HStack(spacing: 10) {
+        VStack(alignment: .center, spacing: 10) {
             Image(systemName: icon)
                 .font(.caption.weight(.bold))
                 .foregroundStyle(color)
                 .frame(width: 28, height: 28)
                 .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .center, spacing: 2) {
                 Text(title)
                     .font(.caption.weight(.bold))
                     .foregroundStyle(AppTheme.ink)
-                    .lineLimit(1)
 
                 Text(value)
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(color)
-                    .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
-
-            Spacer(minLength: 0)
         }
         .padding(12)
         .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
@@ -481,12 +509,27 @@ struct CaptureView: View {
         .background(panelCard)
     }
 
+    private func warrantyPreviewValue(for draft: ReceiptDraft) -> String {
+        switch draft.warrantyStatus {
+        case .none:
+            return "No warranty"
+        case .estimated:
+            return draft.warrantyMonths > 0 ? "\(draft.warrantyMonths) mo to confirm" : "Needs confirmation"
+        case .confirmed:
+            return draft.warrantyMonths > 0 ? "\(draft.warrantyMonths) months confirmed" : "Confirmed"
+        }
+    }
+
     private func startScan() {
         guard VNDocumentCameraViewController.isSupported else {
             scanErrorMessage = "Document scanning is not available on this device. You can still add a purchase manually."
             return
         }
         isPresentingScanner = true
+    }
+
+    private func startPDFImport() {
+        isImportingPDF = true
     }
 
     private func handleScannedPages(_ images: [UIImage]) {
@@ -500,7 +543,7 @@ struct CaptureView: View {
                 await MainActor.run {
                     isProcessingScan = false
                     latestDraftPreview = draft
-                    reviewDraft = draft
+                    reviewSession = .create(from: draft)
                 }
             } catch {
                 await MainActor.run {
@@ -510,18 +553,52 @@ struct CaptureView: View {
             }
         }
     }
+
+    private func handlePDFImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            isProcessingScan = true
+
+            Task {
+                do {
+                    let imported = try await ReceiptPDFOCR.recognizeText(from: url)
+                    let draft = ReceiptTextParser.draft(from: imported.text, pageCount: imported.pageCount)
+                    await MainActor.run {
+                        isProcessingScan = false
+                        latestDraftPreview = draft
+                        reviewSession = .create(from: draft)
+                    }
+                } catch {
+                    await MainActor.run {
+                        isProcessingScan = false
+                        scanErrorMessage = error.localizedDescription
+                    }
+                }
+            }
+
+        case .failure(let error):
+            scanErrorMessage = error.localizedDescription
+        }
+    }
 }
 
-private struct ReceiptReviewView: View {
+struct ReceiptReviewView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var viewContext
+    @EnvironmentObject private var notificationManager: SmartNotificationManager
 
     @State private var draft: ReceiptDraft
     @State private var showsSourceText = false
+    @State private var showsLearningDetails = false
     @State private var saveErrorMessage: String?
+    private let purchaseToEdit: PurchaseRecord?
+    private let initialDraft: ReceiptDraft
 
-    init(initialDraft: ReceiptDraft, onSave: @escaping (ReceiptDraft) -> Void) {
+    init(initialDraft: ReceiptDraft, purchaseToEdit: PurchaseRecord? = nil, onSave: @escaping (ReceiptDraft) -> Void) {
         _draft = State(initialValue: initialDraft)
+        self.purchaseToEdit = purchaseToEdit
+        self.initialDraft = initialDraft
         self.onSave = onSave
     }
 
@@ -532,6 +609,7 @@ private struct ReceiptReviewView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     headerCard
+                    reviewAssistCard
                     essentialsCard
                     coverageCard
                     sourceCard
@@ -540,7 +618,7 @@ private struct ReceiptReviewView: View {
             }
             .scrollIndicators(.hidden)
             .background(background)
-            .navigationTitle("Review")
+            .navigationTitle(purchaseToEdit == nil ? "Review" : "Update")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -583,15 +661,150 @@ private struct ReceiptReviewView: View {
 
     private var headerCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(draft.sourceType == "Manual" ? "Start with the essentials" : "Confirm the extracted details")
+            Text(headerTitle)
                 .font(.title2.weight(.semibold))
                 .foregroundStyle(AppTheme.ink)
-            Text(draft.sourceType == "Manual" ? "Add the purchase once, and Keep Sure will track the dates for you from here." : "Keep Sure guessed the merchant, purchase date, amount, and likely coverage. Adjust anything before you save.")
+            Text(headerMessage)
                 .font(.subheadline)
                 .foregroundStyle(AppTheme.secondaryAccent.opacity(0.78))
         }
         .padding(20)
         .background(panelCard)
+    }
+
+    private var headerTitle: String {
+        if purchaseToEdit != nil {
+            return "Review what Keep Sure found"
+        }
+
+        return draft.sourceType == "Manual" ? "Start with the essentials" : "Confirm the extracted details"
+    }
+
+    private var headerMessage: String {
+        if purchaseToEdit != nil {
+            return "Tighten any details that still feel uncertain so your reminders and warranty timeline stay trustworthy."
+        }
+
+        return draft.sourceType == "Manual"
+            ? "Add the purchase once, and Keep Sure will track the dates for you from here."
+            : "Keep Sure guessed the merchant, purchase date, amount, and likely coverage. Adjust anything before you save."
+    }
+
+    private var reviewAssistCard: some View {
+        Group {
+            if shouldShowReviewAssist {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "wand.and.stars")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(AppTheme.accent)
+                            .frame(width: 40, height: 40)
+                            .background(AppTheme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Quick review")
+                                .font(.headline.weight(.semibold))
+                                .foregroundStyle(AppTheme.ink)
+                            Text("Fix the uncertain parts first, then the rest of the form usually falls into place.")
+                                .font(.subheadline)
+                                .foregroundStyle(AppTheme.secondaryAccent.opacity(0.78))
+                        }
+                    }
+
+                    if !draft.learnedAdjustmentSummary.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: "arrow.triangle.branch")
+                                    .font(.subheadline.weight(.bold))
+                                    .foregroundStyle(AppTheme.accent)
+
+                                Text(draft.learnedAdjustmentSummary)
+                                    .font(.footnote.weight(.medium))
+                                    .foregroundStyle(AppTheme.secondaryAccent.opacity(0.82))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            DisclosureGroup(isExpanded: $showsLearningDetails) {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text("Keep Sure reused a correction from one of your earlier reviews so this import starts closer to right.")
+                                        .font(.footnote)
+                                        .foregroundStyle(AppTheme.secondaryAccent.opacity(0.78))
+
+                                    Button("Reset learned suggestion") {
+                                        resetLearnedSuggestion()
+                                    }
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(AppTheme.accent)
+                                    .buttonStyle(.plain)
+                                }
+                                .padding(.top, 6)
+                            } label: {
+                                Text("Why this changed")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(AppTheme.accent)
+                            }
+                        }
+                        .padding(12)
+                        .background(Color.white.opacity(0.48), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    }
+
+                    if needsMerchantHelp {
+                        reviewSuggestionBlock(
+                            title: "Merchant looks uncertain",
+                            subtitle: "Choose one of the likely matches or keep editing manually.",
+                            suggestions: merchantSuggestions
+                        ) { suggestion in
+                            draft.merchantName = suggestion
+                        }
+                    }
+
+                    if needsProductHelp {
+                        reviewSuggestionBlock(
+                            title: "Product name needs a quick pass",
+                            subtitle: "Keep Sure pulled a few likely product lines from the import.",
+                            suggestions: productSuggestions
+                        ) { suggestion in
+                            draft.productName = suggestion
+                        }
+                    }
+
+                    if needsWarrantyHelp {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Warranty still needs confirmation")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(AppTheme.ink)
+
+                            Text("One tap is enough if you already know the right answer.")
+                                .font(.footnote)
+                                .foregroundStyle(AppTheme.secondaryAccent.opacity(0.75))
+
+                            HStack(spacing: 10) {
+                                quickReviewButton("No warranty") {
+                                    draft.warrantyStatus = .none
+                                    draft.warrantyMonths = 0
+                                }
+
+                                quickReviewButton("Keep likely") {
+                                    if draft.warrantyStatus == .none {
+                                        draft.warrantyStatus = .estimated
+                                        draft.warrantyMonths = max(draft.warrantyMonths, 12)
+                                    } else {
+                                        draft.warrantyStatus = .estimated
+                                    }
+                                }
+
+                                quickReviewButton("Confirm") {
+                                    draft.warrantyStatus = .confirmed
+                                    draft.warrantyMonths = max(draft.warrantyMonths, 12)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(20)
+                .background(panelCard)
+            }
+        }
     }
 
     private var essentialsCard: some View {
@@ -636,12 +849,38 @@ private struct ReceiptReviewView: View {
 
             Stepper("Return window: \(draft.returnDays) days", value: $draft.returnDays, in: 0...180)
                 .tint(AppTheme.accent)
+            Picker("Warranty type", selection: $draft.warrantyStatus) {
+                ForEach(WarrantyStatus.allCases, id: \.self) { status in
+                    Text(status.title).tag(status)
+                }
+            }
+            .pickerStyle(.segmented)
+            .tint(AppTheme.accent)
+
             Stepper("Warranty: \(draft.warrantyMonths) months", value: $draft.warrantyMonths, in: 0...60)
                 .tint(AppTheme.accent)
+                .disabled(draft.warrantyStatus == .none)
+                .opacity(draft.warrantyStatus == .none ? 0.45 : 1)
+
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: warrantyGuidanceIcon)
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(AppTheme.accent)
+                    .frame(width: 38, height: 38)
+                    .background(AppTheme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                Text(warrantyGuidanceText)
+                    .font(.subheadline)
+                    .foregroundStyle(AppTheme.secondaryAccent.opacity(0.82))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(14)
+            .background(Color.white.opacity(0.48), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
 
             Divider()
 
             summaryRow(title: "Return deadline", value: draft.windows.returnDeadline?.formatted(date: .abbreviated, time: .omitted) ?? "None")
+            summaryRow(title: "Warranty status", value: draft.warrantyStatus.title)
             summaryRow(title: "Warranty ends", value: draft.windows.warrantyExpiration?.formatted(date: .abbreviated, time: .omitted) ?? "None")
         }
         .padding(20)
@@ -714,11 +953,129 @@ private struct ReceiptReviewView: View {
         }
     }
 
+    private func reviewSuggestionBlock(
+        title: String,
+        subtitle: String,
+        suggestions: [String],
+        apply: @escaping (String) -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.ink)
+
+            Text(subtitle)
+                .font(.footnote)
+                .foregroundStyle(AppTheme.secondaryAccent.opacity(0.75))
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(suggestions, id: \.self) { suggestion in
+                        quickReviewButton(suggestion) {
+                            apply(suggestion)
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+    }
+
+    private func quickReviewButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(AppTheme.accent)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(AppTheme.accent.opacity(0.10), in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var shouldShowReviewAssist: Bool {
+        needsMerchantHelp || needsProductHelp || needsWarrantyHelp
+    }
+
+    private var needsMerchantHelp: Bool {
+        draft.sourceType != "Manual"
+            && (trimmedMerchantName.isEmpty || trimmedMerchantName == "Unknown merchant")
+            && !merchantSuggestions.isEmpty
+    }
+
+    private var needsProductHelp: Bool {
+        draft.sourceType != "Manual"
+            && (trimmedProductName.isEmpty || trimmedProductName == "Untitled purchase" || trimmedProductName == "Scanned purchase")
+            && !productSuggestions.isEmpty
+    }
+
+    private var needsWarrantyHelp: Bool {
+        draft.sourceType != "Manual" && draft.warrantyStatus == .estimated
+    }
+
+    private var merchantSuggestions: [String] {
+        ReceiptTextParser.merchantSuggestions(from: draft.recognizedText)
+            .filter { $0.caseInsensitiveCompare(trimmedMerchantName) != .orderedSame }
+    }
+
+    private var productSuggestions: [String] {
+        ReceiptTextParser.productSuggestions(from: draft.recognizedText, merchant: draft.merchantName)
+            .filter { $0.caseInsensitiveCompare(trimmedProductName) != .orderedSame }
+    }
+
+    private var trimmedMerchantName: String {
+        draft.merchantName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var trimmedProductName: String {
+        draft.productName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var warrantyGuidanceIcon: String {
+        switch draft.warrantyStatus {
+        case .none:
+            return "questionmark.shield"
+        case .estimated:
+            return "sparkles"
+        case .confirmed:
+            return "checkmark.shield.fill"
+        }
+    }
+
+    private var warrantyGuidanceText: String {
+        if draft.warrantyStatus == .estimated, !draft.warrantyConfidenceNote.isEmpty {
+            return draft.warrantyConfidenceNote
+        }
+
+        return draft.warrantyStatus.reviewGuidance
+    }
+
+    private func resetLearnedSuggestion() {
+        ImportLearningStore.shared.forgetLearnedAdjustments(appliedTo: draft)
+
+        guard let baseline = draft.importBaseline else {
+            draft.learnedAdjustmentSummary = ""
+            showsLearningDetails = false
+            return
+        }
+
+        draft.merchantName = baseline.merchantName
+        draft.productName = baseline.productName
+        draft.categoryName = baseline.categoryName
+        draft.warrantyStatus = baseline.warrantyStatus
+        draft.warrantyMonths = baseline.warrantyMonths
+        draft.warrantyConfidenceNote = baseline.warrantyConfidenceNote
+        draft.learnedAdjustmentSummary = ""
+        showsLearningDetails = false
+    }
+
     private func save() {
-        let record = PurchaseRecord(context: viewContext)
+        let record = purchaseToEdit ?? PurchaseRecord(context: viewContext)
         let windows = draft.windows
 
-        record.id = UUID()
+        if record.id == nil {
+            record.id = UUID()
+        }
         record.productName = draft.productName.trimmingCharacters(in: .whitespacesAndNewlines)
         record.merchantName = draft.merchantName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Unknown merchant" : draft.merchantName.trimmingCharacters(in: .whitespacesAndNewlines)
         record.categoryName = draft.categoryName
@@ -728,13 +1085,21 @@ private struct ReceiptReviewView: View {
         record.purchaseDate = draft.purchaseDate
         record.returnDeadline = windows.returnDeadline
         record.warrantyExpiration = windows.warrantyExpiration
-        record.createdAt = .now
+        record.warrantyStatusRaw = draft.warrantyStatus.rawValue
+        if record.createdAt == nil {
+            record.createdAt = .now
+        }
         record.currencyCode = draft.currencyCode
         record.price = draft.price
         record.isArchived = false
+        record.returnCompleted = false
 
         do {
             try viewContext.save()
+            ImportLearningStore.shared.recordCorrection(from: initialDraft, to: draft)
+            Task {
+                await notificationManager.rescheduleAll(in: PersistenceController.shared.container)
+            }
             onSave(draft)
             dismiss()
         } catch {

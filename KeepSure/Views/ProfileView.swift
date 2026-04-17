@@ -4,6 +4,7 @@ import SwiftUI
 struct ProfileView: View {
     @EnvironmentObject private var emailSyncManager: EmailSyncManager
     @EnvironmentObject private var appModeManager: AppModeManager
+    @EnvironmentObject private var notificationManager: SmartNotificationManager
     @AppStorage("email_sync_enabled") private var emailSyncEnabled = true
     @AppStorage("gmail_launch_prompt_deferred") private var gmailLaunchPromptDeferred = false
     @AppStorage("smart_alerts_enabled") private var smartAlertsEnabled = true
@@ -257,6 +258,25 @@ struct ProfileView: View {
                     }
                 }
                 .tint(AppTheme.accent)
+                .onChange(of: smartAlertsEnabled) { _, isEnabled in
+                    Task {
+                        await notificationManager.applyPreference(enabled: isEnabled, container: PersistenceController.shared.container)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    infoRow(title: "Reminder status", value: notificationManager.permissionStatusLine)
+                    infoRow(title: "Reminder mix", value: notificationManager.cadenceLine)
+                }
+                .padding(16)
+                .background(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(AppTheme.elevatedPanelFill)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.74), lineWidth: 1)
+                        }
+                )
             }
         }
     }
@@ -265,7 +285,9 @@ struct ProfileView: View {
         panel(title: "Preferences", icon: "slider.horizontal.3") {
             VStack(spacing: 14) {
                 infoRow(title: "Retailer return policies", value: "Coming soon")
-                infoRow(title: "Default reminder cadence", value: "7 days, 3 days, 1 day")
+                infoRow(title: "Return reminders", value: "7, 3, and 1 day before the window closes")
+                infoRow(title: "Warranty reminders", value: "30 and 7 days before confirmed coverage ends")
+                infoRow(title: "Review nudges", value: "Next day for uncertain imports only")
                 infoRow(title: "Claim assistant", value: "Planned")
                 infoRow(title: "Receipt export", value: "PDF and CSV")
             }
@@ -455,5 +477,7 @@ struct ProfileView: View {
                 await emailSyncManager.connectGmail()
             }
         }
+
+        await notificationManager.rescheduleAll(in: PersistenceController.shared.container)
     }
 }

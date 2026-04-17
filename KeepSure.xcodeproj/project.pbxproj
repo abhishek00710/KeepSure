@@ -400,14 +400,7 @@
 				DEVELOPMENT_TEAM = R822Q76WSW;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleURLTypes = (
-					{
-						CFBundleURLName = KeepSureOAuth;
-						CFBundleURLSchemes = (
-							com.saaain.keepsure,
-						);
-					},
-				);
+				INFOPLIST_KEY_CFBundleURLTypes = "{\n    CFBundleURLName = KeepSureOAuth;\n    CFBundleURLSchemes =     (\n        \"com.saaain.keepsure\"\n    );\n}";
 				INFOPLIST_KEY_GmailClientID = "212198581284-iorcj2quhua0mh5m4k4boejvdb5270s4.apps.googleusercontent.com";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Keep Sure uses the camera to scan receipts and save your purchase details, return windows, and warranties.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -444,14 +437,7 @@
 				DEVELOPMENT_TEAM = R822Q76WSW;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleURLTypes = (
-					{
-						CFBundleURLName = KeepSureOAuth;
-						CFBundleURLSchemes = (
-							com.saaain.keepsure,
-						);
-					},
-				);
+				INFOPLIST_KEY_CFBundleURLTypes = "{\n    CFBundleURLName = KeepSureOAuth;\n    CFBundleURLSchemes =     (\n        \"com.saaain.keepsure\"\n    );\n}";
 				INFOPLIST_KEY_GmailClientID = "212198581284-iorcj2quhua0mh5m4k4boejvdb5270s4.apps.googleusercontent.com";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Keep Sure uses the camera to scan receipts and save your purchase details, return windows, and warranties.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

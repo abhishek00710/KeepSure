@@ -17,6 +17,7 @@ final class EmailSyncManager: NSObject, ObservableObject {
     @Published private(set) var gmailClientID: String
 
     @Published private(set) var connectedEmail: String?
+    @Published private(set) var connectedFirstName: String?
     @Published private(set) var lastSyncAt: Date?
     @Published private(set) var isAuthorizing = false
     @Published private(set) var isSyncing = false
@@ -32,6 +33,7 @@ final class EmailSyncManager: NSObject, ObservableObject {
         self.container = container
         self.gmailClientID = Self.resolveClientID(defaults: defaults)
         self.connectedEmail = defaults.string(forKey: DefaultsKeys.connectedEmail)
+        self.connectedFirstName = defaults.string(forKey: DefaultsKeys.connectedFirstName)
         self.lastSyncAt = defaults.object(forKey: DefaultsKeys.lastSyncAt) as? Date
         super.init()
     }
@@ -77,9 +79,11 @@ final class EmailSyncManager: NSObject, ObservableObject {
     func restoreSession() {
         gmailClientID = Self.resolveClientID(defaults: defaults)
         connectedEmail = defaults.string(forKey: DefaultsKeys.connectedEmail)
+        connectedFirstName = defaults.string(forKey: DefaultsKeys.connectedFirstName)
         lastSyncAt = defaults.object(forKey: DefaultsKeys.lastSyncAt) as? Date
         if tokenStore.load() == nil {
             connectedEmail = nil
+            connectedFirstName = nil
         }
     }
 
@@ -125,7 +129,9 @@ final class EmailSyncManager: NSObject, ObservableObject {
 
             let profile = try await GmailAPI.fetchProfile(accessToken: envelope.accessToken)
             connectedEmail = profile.email
+            connectedFirstName = profile.bestFirstName
             defaults.set(profile.email, forKey: DefaultsKeys.connectedEmail)
+            defaults.set(profile.bestFirstName, forKey: DefaultsKeys.connectedFirstName)
             statusMessage = "Connected Gmail for \(profile.email)."
 
             await syncInbox()
@@ -137,10 +143,15 @@ final class EmailSyncManager: NSObject, ObservableObject {
     func disconnect() {
         tokenStore.clear()
         connectedEmail = nil
+        connectedFirstName = nil
         lastSyncAt = nil
         statusMessage = "Gmail disconnected."
         defaults.removeObject(forKey: DefaultsKeys.connectedEmail)
+        defaults.removeObject(forKey: DefaultsKeys.connectedFirstName)
         defaults.removeObject(forKey: DefaultsKeys.lastSyncAt)
+        Task {
+            await SmartNotificationManager.shared.rescheduleAll(in: container)
+        }
     }
 
     func syncOnLaunchIfNeeded() async {
@@ -167,12 +178,14 @@ final class EmailSyncManager: NSObject, ObservableObject {
             let accessToken = try await validAccessToken()
             let messages = try await GmailAPI.fetchPurchaseMessages(accessToken: accessToken, maxResults: 24)
             let summary = try await importMessages(messages)
+            container.viewContext.refreshAllObjects()
 
             let syncDate = Date()
             lastSyncAt = syncDate
             defaults.set(syncDate, forKey: DefaultsKeys.lastSyncAt)
 
             statusMessage = summary.statusLine
+            await SmartNotificationManager.shared.rescheduleAll(in: container)
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
@@ -335,6 +348,7 @@ extension EmailSyncManager: ASWebAuthenticationPresentationContextProviding {
 private enum DefaultsKeys {
     static let gmailClientID = "gmail_client_id"
     static let connectedEmail = "gmail_connected_email"
+    static let connectedFirstName = "gmail_connected_first_name"
     static let lastSyncAt = "gmail_last_sync_at"
 }
 
@@ -587,8 +601,88 @@ struct GmailMessage: Equatable {
     let date: Date?
 }
 
+private struct GmailParsedPurchase {
+    let draft: ReceiptDraft
+    let orderNumber: String?
+    let stage: GmailOrderStage
+    let merchantName: String
+}
+
+enum GmailOrderStage: String {
+    case placed
+    case shipped
+    case delivered
+    case unknown
+
+    var noteTitle: String {
+        switch self {
+        case .placed:
+            return "Order placed"
+        case .shipped:
+            return "Shipped"
+        case .delivered:
+            return "Delivered"
+        case .unknown:
+            return "Purchase email"
+        }
+    }
+
+    var statusLineTitle: String {
+        switch self {
+        case .placed:
+            return "Order placed"
+        case .shipped:
+            return "Shipped"
+        case .delivered:
+            return "Delivered"
+        case .unknown:
+            return "Email saved"
+        }
+    }
+}
+
 private struct GmailUserProfile: Decodable {
     let email: String
+    let name: String?
+    let givenName: String?
+
+    var bestFirstName: String? {
+        if let givenName = cleanedFirstName(from: givenName) {
+            return givenName
+        }
+
+        if let name = cleanedFirstName(from: name) {
+            return name
+        }
+
+        let localPart = email.split(separator: "@").first.map(String.init) ?? ""
+        let fallback = localPart
+            .split(whereSeparator: { $0 == "." || $0 == "_" || $0 == "-" })
+            .first
+            .map(String.init)
+
+        return cleanedFirstName(from: fallback)
+    }
+
+    private func cleanedFirstName(from rawValue: String?) -> String? {
+        guard let rawValue else { return nil }
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let firstToken = trimmed
+            .split(separator: " ")
+            .first
+            .map(String.init) ?? trimmed
+
+        guard !firstToken.isEmpty else { return nil }
+        return firstToken.prefix(1).uppercased() + firstToken.dropFirst()
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case email
+        case name
+        case givenName = "given_name"
+    }
 }
 
 private struct GmailTokenResponse: Decodable {
@@ -684,9 +778,17 @@ private struct GmailPayload: Decodable {
         } else if mime == "text/html" {
             if let html = body?.decodedString {
                 let plain = html
+                    .replacingOccurrences(of: "(?i)<br\\s*/?>", with: "\n", options: .regularExpression)
+                    .replacingOccurrences(of: "(?i)</p\\s*>", with: "\n", options: .regularExpression)
+                    .replacingOccurrences(of: "(?i)</div\\s*>", with: "\n", options: .regularExpression)
+                    .replacingOccurrences(of: "(?i)</tr\\s*>", with: "\n", options: .regularExpression)
+                    .replacingOccurrences(of: "(?i)</td\\s*>", with: " ", options: .regularExpression)
                     .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
                     .replacingOccurrences(of: "&nbsp;", with: " ")
                     .replacingOccurrences(of: "&amp;", with: "&")
+                    .replacingOccurrences(of: "&quot;", with: "\"")
+                    .replacingOccurrences(of: "&#39;", with: "'")
+                    .replacingOccurrences(of: "&apos;", with: "'")
                 chunks.append(plain)
             }
         }
@@ -760,7 +862,7 @@ private enum GmailDateParser {
 }
 
 enum GmailPurchaseParser {
-    static func draft(from message: GmailMessage) -> ReceiptDraft? {
+    fileprivate static func parse(_ message: GmailMessage) -> GmailParsedPurchase? {
         let combinedText = """
         Subject: \(message.subject)
         From: \(message.from)
@@ -773,8 +875,14 @@ enum GmailPurchaseParser {
         }
 
         var draft = ReceiptTextParser.draft(from: combinedText, pageCount: 1)
-        let merchant = inferMerchant(from: message.from) ?? draft.merchantName
-        let product = inferProduct(from: message.subject, merchant: merchant)
+        let profile = matchingProfile(sender: message.from, subject: message.subject, body: combinedText)
+        let merchant = profile?.name ?? inferMerchant(from: message.from) ?? draft.merchantName
+        let product = inferProduct(
+            from: message.subject,
+            body: combinedText,
+            merchant: merchant,
+            profile: profile
+        )
 
         if !merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             draft.merchantName = merchant
@@ -782,16 +890,65 @@ enum GmailPurchaseParser {
         if let product, !product.isEmpty {
             draft.productName = product
         }
+        if let profile {
+            draft.returnDays = profile.returnDays
+            if draft.categoryName == "General" {
+                draft.categoryName = profile.categoryHint
+            }
+        }
+        if let total = inferOrderTotal(from: combinedText) {
+            draft.price = total
+        }
         if let messageDate = message.date {
             draft.purchaseDate = messageDate
         }
 
+        let warrantyInference = ReceiptTextParser.inferWarrantyDetails(
+            from: combinedText,
+            category: draft.categoryName,
+            merchant: draft.merchantName,
+            productName: draft.productName
+        )
+        draft.warrantyStatus = warrantyInference.status
+        draft.warrantyMonths = warrantyInference.months
+        draft.warrantyConfidenceNote = warrantyInference.note
+        draft.importBaseline = ReceiptImportBaseline(
+            merchantName: draft.merchantName,
+            productName: draft.productName,
+            categoryName: draft.categoryName,
+            warrantyStatus: warrantyInference.status,
+            warrantyMonths: warrantyInference.months,
+            warrantyConfidenceNote: warrantyInference.note
+        )
+
+        ImportLearningStore.shared.apply(to: &draft)
+
+        let refinedWarrantyInference = ReceiptTextParser.inferWarrantyDetails(
+            from: combinedText,
+            category: draft.categoryName,
+            merchant: draft.merchantName,
+            productName: draft.productName
+        )
+        if draft.warrantyStatus != .confirmed {
+            draft.warrantyStatus = refinedWarrantyInference.status
+            draft.warrantyMonths = refinedWarrantyInference.months
+            draft.warrantyConfidenceNote = refinedWarrantyInference.note
+        }
+
+        let orderNumber = inferOrderNumber(from: combinedText)
+        let stage = inferStage(subject: message.subject, body: combinedText)
+
         draft.sourceType = "Email"
-        draft.notes = "Imported from Gmail: \(message.subject)"
+        draft.notes = buildNotes(subject: message.subject, body: combinedText, orderNumber: orderNumber, stage: stage)
         draft.recognizedText = combinedText
         draft.pageCount = 1
 
-        return draft
+        return GmailParsedPurchase(
+            draft: draft,
+            orderNumber: orderNumber,
+            stage: stage,
+            merchantName: merchant
+        )
     }
 
     private static func isLikelyPurchase(subject: String, body: String) -> Bool {
@@ -813,6 +970,10 @@ enum GmailPurchaseParser {
     }
 
     private static func inferMerchant(from sender: String) -> String? {
+        if let profile = matchingProfile(sender: sender, subject: "", body: "") {
+            return profile.name
+        }
+
         let cleaned = sender
             .components(separatedBy: "<")
             .first?
@@ -836,7 +997,21 @@ enum GmailPurchaseParser {
         return nil
     }
 
-    private static func inferProduct(from subject: String, merchant: String) -> String? {
+    private static func inferProduct(from subject: String, body: String, merchant: String, profile: MerchantProfile?) -> String? {
+        if let profile {
+            for pattern in profile.productPatterns {
+                if let match = firstMatch(in: body, pattern: pattern), isUsefulProductCandidate(match, merchant: merchant) {
+                    return cleanupProduct(match, merchant: merchant)
+                }
+            }
+        }
+
+        for pattern in generalBodyProductPatterns {
+            if let match = firstMatch(in: body, pattern: pattern), isUsefulProductCandidate(match, merchant: merchant) {
+                return cleanupProduct(match, merchant: merchant)
+            }
+        }
+
         let candidates = [
             "order confirmed:",
             "your order:",
@@ -863,10 +1038,300 @@ enum GmailPurchaseParser {
             .replacingOccurrences(of: "Your order", with: "", options: .caseInsensitive)
             .replacingOccurrences(of: "Order confirmed", with: "", options: .caseInsensitive)
             .replacingOccurrences(of: "Receipt", with: "", options: .caseInsensitive)
+            .replacingOccurrences(of: "has shipped", with: "", options: .caseInsensitive)
+            .replacingOccurrences(of: "has been delivered", with: "", options: .caseInsensitive)
+            .replacingOccurrences(of: "delivery update", with: "", options: .caseInsensitive)
             .trimmingCharacters(in: CharacterSet(charactersIn: " :-"))
 
-        return cleaned.isEmpty ? nil : cleaned
+        let normalized = cleanupProduct(cleaned, merchant: merchant)
+        return normalized.isEmpty ? nil : normalized
     }
+
+    private static func inferOrderTotal(from body: String) -> Double? {
+        let patterns = [
+            #"(?i)(?:order total|grand total|total paid|amount paid|payment total|total)[^\d$]{0,12}\$?\s*([0-9]+(?:\.[0-9]{2})?)"#,
+            #"(?i)\$([0-9]+(?:\.[0-9]{2})?)\s*(?:order total|grand total|total paid|amount paid)"#
+        ]
+
+        for pattern in patterns {
+            if let match = firstMatch(in: body, pattern: pattern), let value = Double(match) {
+                return value
+            }
+        }
+
+        return nil
+    }
+
+    private static func buildNotes(subject: String, body: String, orderNumber: String?, stage: GmailOrderStage) -> String {
+        var notes = ["Imported from Gmail: \(subject)", stage.noteTitle]
+
+        if let orderNumber {
+            notes.append("Order \(orderNumber)")
+        }
+
+        return notes.joined(separator: " • ")
+    }
+
+    private static func inferOrderNumber(from body: String) -> String? {
+        let patterns = [
+            #"(?i)(?:order number|order #|order no\.?|confirmation #|confirmation number)[^\w]{0,6}([A-Z0-9\-]{5,})"#,
+            #"(?i)#([A-Z0-9]{6,})"#
+        ]
+
+        for pattern in patterns {
+            if let match = firstMatch(in: body, pattern: pattern) {
+                return match
+            }
+        }
+
+        return nil
+    }
+
+    private static func inferStage(subject: String, body: String) -> GmailOrderStage {
+        let haystack = "\(subject) \(body)".lowercased()
+
+        let deliveredHints = [
+            "delivered",
+            "was delivered",
+            "has been delivered",
+            "delivery complete",
+            "picked up"
+        ]
+        if deliveredHints.contains(where: haystack.contains) {
+            return .delivered
+        }
+
+        let shippedHints = [
+            "shipped",
+            "has shipped",
+            "on the way",
+            "out for delivery",
+            "shipping update",
+            "track your package"
+        ]
+        if shippedHints.contains(where: haystack.contains) {
+            return .shipped
+        }
+
+        let placedHints = [
+            "order confirmed",
+            "thanks for your order",
+            "receipt",
+            "invoice",
+            "purchase confirmation",
+            "order received"
+        ]
+        if placedHints.contains(where: haystack.contains) {
+            return .placed
+        }
+
+        return .unknown
+    }
+
+    private static func matchingProfile(sender: String, subject: String, body: String) -> MerchantProfile? {
+        let senderLower = sender.lowercased()
+        let subjectLower = subject.lowercased()
+        let bodyLower = body.lowercased()
+
+        return merchantProfiles.first { profile in
+            profile.senderHints.contains(where: senderLower.contains)
+                || profile.subjectHints.contains(where: subjectLower.contains)
+                || profile.bodyHints.contains(where: bodyLower.contains)
+        }
+    }
+
+    private static func cleanupProduct(_ value: String, merchant: String) -> String {
+        value
+            .replacingOccurrences(of: merchant, with: "", options: .caseInsensitive)
+            .replacingOccurrences(of: "item:", with: "", options: .caseInsensitive)
+            .replacingOccurrences(of: "items:", with: "", options: .caseInsensitive)
+            .replacingOccurrences(of: "product:", with: "", options: .caseInsensitive)
+            .replacingOccurrences(of: "description:", with: "", options: .caseInsensitive)
+            .trimmingCharacters(in: CharacterSet(charactersIn: " :-\n\t"))
+    }
+
+    private static func isUsefulProductCandidate(_ value: String, merchant: String) -> Bool {
+        let cleaned = cleanupProduct(value, merchant: merchant)
+        let lower = cleaned.lowercased()
+        let blocked = [
+            "order total",
+            "subtotal",
+            "tax",
+            "shipping",
+            "delivered",
+            "shipped",
+            "receipt",
+            "order number",
+            "confirmation",
+            "track your package"
+        ]
+
+        return !cleaned.isEmpty
+            && cleaned.count > 3
+            && !blocked.contains(where: lower.contains)
+    }
+
+    private static func firstMatch(in text: String, pattern: String) -> String? {
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(text.startIndex..., in: text)
+        guard
+            let match = expression.firstMatch(in: text, options: [], range: range),
+            match.numberOfRanges > 1,
+            let captureRange = Range(match.range(at: 1), in: text)
+        else {
+            return nil
+        }
+
+        return String(text[captureRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static let generalBodyProductPatterns = [
+        #"(?im)^\s*(?:item|items|product|description)\s*[:\-]\s*(.+)$"#,
+        #"(?im)^\s*(?:order item|ordered item|item name)\s*[:\-]\s*(.+)$"#,
+        #"(?im)^\s*1\s*x\s+(.+)$"#,
+        #"(?im)^\s*qty\s*\d+\s+(.+)$"#,
+        #"(?im)^\s*([A-Z0-9][A-Za-z0-9 .,'’\-/()]{6,})\s+\$[0-9]+(?:\.[0-9]{2})?\s*$"#
+    ]
+
+    private static let merchantProfiles: [MerchantProfile] = [
+        MerchantProfile(
+            name: "Amazon",
+            senderHints: ["amazon.com", "amazon.in", "amazon.co.uk"],
+            subjectHints: ["amazon", "your amazon.com order"],
+            bodyHints: ["sold by amazon", "amazon order"],
+            returnDays: 30,
+            categoryHint: "General",
+            productPatterns: [
+                #"(?im)^\s*item(?:s)?\s*ordered\s*[:\-]?\s*(.+)$"#,
+                #"(?im)^\s*order summary\s*[:\-]?\s*(.+)$"#,
+                #"(?im)^\s*item(?:s)?\s*:\s*(.+)$"#
+            ]
+        ),
+        MerchantProfile(
+            name: "Costco",
+            senderHints: ["costco.com"],
+            subjectHints: ["costco", "order number"],
+            bodyHints: ["costco.com order number"],
+            returnDays: 90,
+            categoryHint: "Home",
+            productPatterns: [
+                #"(?im)^\s*item description\s*[:\-]?\s*(.+)$"#,
+                #"(?im)^\s*product details\s*[:\-]?\s*(.+)$"#,
+                #"(?im)^\s*ordered item\s*[:\-]?\s*(.+)$"#
+            ]
+        ),
+        MerchantProfile(
+            name: "Target",
+            senderHints: ["target.com"],
+            subjectHints: ["target order", "your target order"],
+            bodyHints: ["order pickup", "target order number"],
+            returnDays: 30,
+            categoryHint: "General",
+            productPatterns: [
+                #"(?im)^\s*item\s*[:\-]\s*(.+)$"#,
+                #"(?im)^\s*items in your order\s*[:\-]?\s*(.+)$"#,
+                #"(?im)^\s*product name\s*[:\-]\s*(.+)$"#
+            ]
+        ),
+        MerchantProfile(
+            name: "Walmart",
+            senderHints: ["walmart.com"],
+            subjectHints: ["walmart order", "your walmart order"],
+            bodyHints: ["walmart order #"],
+            returnDays: 30,
+            categoryHint: "General",
+            productPatterns: [
+                #"(?im)^\s*item details\s*[:\-]?\s*(.+)$"#,
+                #"(?im)^\s*item\s*[:\-]\s*(.+)$"#,
+                #"(?im)^\s*items ordered\s*[:\-]?\s*(.+)$"#
+            ]
+        ),
+        MerchantProfile(
+            name: "Best Buy",
+            senderHints: ["bestbuy.com", "best buy"],
+            subjectHints: ["best buy", "your order has"],
+            bodyHints: ["best buy order number"],
+            returnDays: 15,
+            categoryHint: "Electronics",
+            productPatterns: [
+                #"(?im)^\s*item\s*[:\-]\s*(.+)$"#,
+                #"(?im)^\s*product name\s*[:\-]\s*(.+)$"#,
+                #"(?im)^\s*item details\s*[:\-]?\s*(.+)$"#
+            ]
+        ),
+        MerchantProfile(
+            name: "Apple",
+            senderHints: ["apple.com", "apple store"],
+            subjectHints: ["apple store", "your apple order"],
+            bodyHints: ["order details", "apple order number"],
+            returnDays: 14,
+            categoryHint: "Electronics",
+            productPatterns: [
+                #"(?im)^\s*product\s*[:\-]\s*(.+)$"#,
+                #"(?im)^\s*item\s*[:\-]\s*(.+)$"#,
+                #"(?im)^\s*item name\s*[:\-]\s*(.+)$"#
+            ]
+        ),
+        MerchantProfile(
+            name: "Sephora",
+            senderHints: ["sephora.com"],
+            subjectHints: ["sephora", "your order"],
+            bodyHints: ["beauty insider", "order summary"],
+            returnDays: 30,
+            categoryHint: "Beauty",
+            productPatterns: [
+                #"(?im)^\s*item\s*[:\-]\s*(.+)$"#,
+                #"(?im)^\s*product\s*[:\-]\s*(.+)$"#,
+                #"(?im)^\s*items ordered\s*[:\-]?\s*(.+)$"#
+            ]
+        ),
+        MerchantProfile(
+            name: "Home Depot",
+            senderHints: ["homedepot.com", "home depot"],
+            subjectHints: ["home depot", "your order is"],
+            bodyHints: ["home depot order", "order details"],
+            returnDays: 90,
+            categoryHint: "Home",
+            productPatterns: [
+                #"(?im)^\s*product\s*[:\-]\s*(.+)$"#,
+                #"(?im)^\s*item details\s*[:\-]?\s*(.+)$"#
+            ]
+        ),
+        MerchantProfile(
+            name: "Nike",
+            senderHints: ["nike.com"],
+            subjectHints: ["nike order", "your nike order"],
+            bodyHints: ["order number", "thanks for shopping nike"],
+            returnDays: 60,
+            categoryHint: "General",
+            productPatterns: [
+                #"(?im)^\s*item\s*[:\-]\s*(.+)$"#,
+                #"(?im)^\s*product\s*[:\-]\s*(.+)$"#
+            ]
+        ),
+        MerchantProfile(
+            name: "Etsy",
+            senderHints: ["etsy.com"],
+            subjectHints: ["etsy order", "your etsy purchase"],
+            bodyHints: ["order from", "etsy receipt"],
+            returnDays: 30,
+            categoryHint: "General",
+            productPatterns: [
+                #"(?im)^\s*item\s*[:\-]\s*(.+)$"#,
+                #"(?im)^\s*order from\s+.+?\s*[:\-]?\s*(.+)$"#
+            ]
+        )
+    ]
+}
+
+private struct MerchantProfile {
+    let name: String
+    let senderHints: [String]
+    let subjectHints: [String]
+    let bodyHints: [String]
+    let returnDays: Int
+    let categoryHint: String
+    let productPatterns: [String]
 }
 
 private enum GmailPurchaseImporter {
@@ -877,38 +1342,25 @@ private enum GmailPurchaseImporter {
 
         for message in messages {
             if let existing = try existingRecord(for: message.id, in: context) {
-                existing.lastSyncedAt = .now
+                existing.lastSyncedAt = Date()
                 updated += 1
                 continue
             }
 
-            guard let draft = GmailPurchaseParser.draft(from: message) else {
+            guard let parsed = GmailPurchaseParser.parse(message) else {
                 skipped += 1
                 continue
             }
 
-            let record = PurchaseRecord(context: context)
-            let windows = draft.windows
-
-            record.id = UUID()
-            record.productName = draft.productName
-            record.merchantName = draft.merchantName.isEmpty ? "Unknown merchant" : draft.merchantName
-            record.categoryName = draft.categoryName
-            record.familyOwner = draft.familyOwner
-            record.sourceType = "Email"
-            record.notes = draft.notes
-            record.currencyCode = draft.currencyCode
-            record.purchaseDate = draft.purchaseDate
-            record.returnDeadline = windows.returnDeadline
-            record.warrantyExpiration = windows.warrantyExpiration
-            record.createdAt = .now
-            record.price = draft.price
-            record.isArchived = false
-            record.externalProvider = "gmail"
-            record.externalRecordID = message.id
-            record.lastSyncedAt = .now
-
-            imported += 1
+            if let existing = try lifecycleRecord(for: parsed, in: context) {
+                merge(parsed: parsed, into: existing)
+                existing.lastSyncedAt = .now
+                updated += 1
+            } else {
+                let record = PurchaseRecord(context: context)
+                populate(record: record, from: parsed, messageID: message.id)
+                imported += 1
+            }
         }
 
         return GmailImportSummary(imported: imported, updated: updated, skipped: skipped)
@@ -919,6 +1371,149 @@ private enum GmailPurchaseImporter {
         request.fetchLimit = 1
         request.predicate = NSPredicate(format: "externalProvider == %@ AND externalRecordID == %@", "gmail", messageID)
         return try context.fetch(request).first
+    }
+
+    private static func lifecycleRecord(for parsed: GmailParsedPurchase, in context: NSManagedObjectContext) throws -> PurchaseRecord? {
+        let request = PurchaseRecord.fetchRequest()
+        request.fetchLimit = 1
+
+        if let orderNumber = parsed.orderNumber, !orderNumber.isEmpty {
+            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+                NSPredicate(format: "sourceType == %@", "Email"),
+                NSPredicate(format: "merchantName == %@", parsed.merchantName),
+                NSPredicate(format: "gmailOrderNumber == %@", orderNumber)
+            ])
+
+            if let match = try context.fetch(request).first {
+                return match
+            }
+        }
+
+        let fallbackRequest = PurchaseRecord.fetchRequest()
+        fallbackRequest.fetchLimit = 1
+        fallbackRequest.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            NSPredicate(format: "sourceType == %@", "Email"),
+            NSPredicate(format: "merchantName == %@", parsed.merchantName),
+            NSPredicate(format: "productName == %@", parsed.draft.productName),
+            NSPredicate(format: "purchaseDate >= %@ AND purchaseDate <= %@", parsed.draft.purchaseDate.addingTimeInterval(-60 * 60 * 24 * 7) as NSDate, parsed.draft.purchaseDate.addingTimeInterval(60 * 60 * 24 * 7) as NSDate)
+        ])
+        return try context.fetch(fallbackRequest).first
+    }
+
+    private static func merge(parsed: GmailParsedPurchase, into record: PurchaseRecord) {
+        let draft = parsed.draft
+        let windows = draft.windows
+
+        record.productName = preferredValue(current: record.productName, incoming: draft.productName)
+        record.merchantName = preferredValue(current: record.merchantName, incoming: draft.merchantName)
+        record.categoryName = preferredValue(current: record.categoryName, incoming: draft.categoryName)
+        record.familyOwner = preferredValue(current: record.familyOwner, incoming: draft.familyOwner)
+        record.sourceType = "Email"
+        record.notes = mergeNotes(existing: record.notes ?? "", incoming: draft.notes, stage: parsed.stage)
+        record.currencyCode = preferredValue(current: record.currencyCode, incoming: draft.currencyCode)
+        record.purchaseDate = min(record.purchaseDate ?? draft.purchaseDate, draft.purchaseDate)
+        record.returnDeadline = chooseLaterLifecycleDate(existing: record.returnDeadline, incoming: windows.returnDeadline)
+        record.warrantyExpiration = chooseLaterLifecycleDate(existing: record.warrantyExpiration, incoming: windows.warrantyExpiration)
+        record.warrantyStatusRaw = preferredWarrantyStatus(existing: record.warrantyStatusRaw, incoming: draft.warrantyStatus.rawValue)
+        record.createdAt = record.createdAt ?? .now
+        record.price = max(record.price, draft.price)
+        record.isArchived = false
+        record.returnCompleted = false
+        record.gmailOrderNumber = parsed.orderNumber ?? record.gmailOrderNumber
+        record.gmailLifecycleStageRaw = preferredLifecycleStage(existing: record.gmailLifecycleStageRaw, incoming: parsed.stage.rawValue)
+    }
+
+    private static func populate(record: PurchaseRecord, from parsed: GmailParsedPurchase, messageID: String) {
+        let draft = parsed.draft
+        let windows = draft.windows
+
+        record.id = UUID()
+        record.productName = draft.productName
+        record.merchantName = draft.merchantName.isEmpty ? "Unknown merchant" : draft.merchantName
+        record.categoryName = draft.categoryName
+        record.familyOwner = draft.familyOwner
+        record.sourceType = "Email"
+        record.notes = draft.notes
+        record.currencyCode = draft.currencyCode
+        record.purchaseDate = draft.purchaseDate
+        record.returnDeadline = windows.returnDeadline
+        record.warrantyExpiration = windows.warrantyExpiration
+        record.warrantyStatusRaw = draft.warrantyStatus.rawValue
+        record.createdAt = .now
+        record.price = draft.price
+        record.isArchived = false
+        record.returnCompleted = false
+        record.externalProvider = "gmail"
+        record.externalRecordID = messageID
+        record.lastSyncedAt = .now
+        record.gmailOrderNumber = parsed.orderNumber
+        record.gmailLifecycleStageRaw = parsed.stage.rawValue
+    }
+
+    private static func preferredValue(current: String?, incoming: String) -> String {
+        let currentValue = (current ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let incomingValue = incoming.trimmingCharacters(in: .whitespacesAndNewlines)
+        if currentValue.isEmpty || currentValue == "Unknown merchant" || currentValue == "Untitled purchase" || currentValue == "Scanned purchase" {
+            return incomingValue.isEmpty ? currentValue : incomingValue
+        }
+        return currentValue
+    }
+
+    private static func chooseLaterLifecycleDate(existing: Date?, incoming: Date?) -> Date? {
+        switch (existing, incoming) {
+        case (nil, let incoming):
+            return incoming
+        case (let existing, nil):
+            return existing
+        case let (existing?, incoming?):
+            return max(existing, incoming)
+        }
+    }
+
+    private static func preferredWarrantyStatus(existing: String?, incoming: String) -> String {
+        let existingStatus = WarrantyStatus(rawValue: existing ?? "") ?? .none
+        let incomingStatus = WarrantyStatus(rawValue: incoming) ?? .none
+
+        if incomingStatus == .confirmed || existingStatus == .none {
+            return incoming
+        }
+
+        return existing ?? incoming
+    }
+
+    private static func preferredLifecycleStage(existing: String?, incoming: String) -> String {
+        let existingStage = GmailOrderStage(rawValue: existing ?? "") ?? .unknown
+        let incomingStage = GmailOrderStage(rawValue: incoming) ?? .unknown
+        let ordered: [GmailOrderStage] = [.unknown, .placed, .shipped, .delivered]
+
+        let existingIndex = ordered.firstIndex(of: existingStage) ?? 0
+        let incomingIndex = ordered.firstIndex(of: incomingStage) ?? 0
+        return incomingIndex >= existingIndex ? incoming : (existing ?? incoming)
+    }
+
+    private static func mergeNotes(existing: String, incoming: String, stage: GmailOrderStage) -> String {
+        var parts = existing
+            .split(separator: "•")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        let incomingParts = incoming
+            .split(separator: "•")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        for part in incomingParts {
+            if !parts.contains(where: { $0.caseInsensitiveCompare(part) == .orderedSame }) {
+                parts.append(part)
+            }
+        }
+
+        let stageNote = stage.noteTitle
+        if !parts.contains(where: { $0.caseInsensitiveCompare(stageNote) == .orderedSame }) {
+            parts.append(stageNote)
+        }
+
+        return parts.joined(separator: " • ")
     }
 }
 

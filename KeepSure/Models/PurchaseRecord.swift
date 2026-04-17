@@ -14,12 +14,16 @@ final class PurchaseRecord: NSManagedObject {
     @NSManaged var purchaseDate: Date?
     @NSManaged var returnDeadline: Date?
     @NSManaged var warrantyExpiration: Date?
+    @NSManaged var warrantyStatusRaw: String?
     @NSManaged var createdAt: Date?
     @NSManaged var price: Double
     @NSManaged var isArchived: Bool
+    @NSManaged var returnCompleted: Bool
     @NSManaged var externalProvider: String?
     @NSManaged var externalRecordID: String?
     @NSManaged var lastSyncedAt: Date?
+    @NSManaged var gmailOrderNumber: String?
+    @NSManaged var gmailLifecycleStageRaw: String?
 }
 
 extension PurchaseRecord {
@@ -43,11 +47,47 @@ extension PurchaseRecord {
     var wrappedPurchaseDate: Date { purchaseDate ?? .now }
     var wrappedCreatedAt: Date { createdAt ?? wrappedPurchaseDate }
     var wrappedExternalProvider: String { externalProvider ?? "" }
+    var wrappedGmailOrderNumber: String { gmailOrderNumber ?? "" }
+    var isReturnHandled: Bool { returnCompleted }
+    var warrantyStatus: WarrantyStatus { WarrantyStatus(rawValue: warrantyStatusRaw ?? "") ?? .none }
+    var gmailLifecycleStage: GmailOrderStage {
+        GmailOrderStage(rawValue: gmailLifecycleStageRaw ?? "") ?? .unknown
+    }
+    var estimatedWarrantyExpiration: Date? { warrantyStatus == .estimated ? warrantyExpiration : nil }
+    var confirmedWarrantyExpiration: Date? { warrantyStatus == .confirmed ? warrantyExpiration : nil }
+    var hasVisibleWarranty: Bool { confirmedWarrantyExpiration != nil }
+    var hasUncertainMerchant: Bool { wrappedMerchantName == "Unknown merchant" }
+    var hasUncertainProduct: Bool { wrappedProductName == "Untitled purchase" || wrappedProductName == "Scanned purchase" }
+    var needsWarrantyConfirmation: Bool { warrantyStatus == .estimated }
+    var needsReview: Bool { !reviewReasons.isEmpty }
+    var primaryReviewReason: String { reviewReasons.first ?? "Review details" }
+
+    var reviewReasons: [String] {
+        var reasons: [String] = []
+
+        if needsWarrantyConfirmation {
+            reasons.append("Warranty estimate needs confirmation")
+        }
+
+        if hasUncertainMerchant {
+            reasons.append("Merchant needs review")
+        }
+
+        if hasUncertainProduct {
+            reasons.append("Product name needs review")
+        }
+
+        if wrappedNotes.localizedCaseInsensitiveContains("review") {
+            reasons.append("Imported details should be checked")
+        }
+
+        return Array(NSOrderedSet(array: reasons)) as? [String] ?? reasons
+    }
 
     var timelineItems: [(label: String, date: Date)] {
         [
-            returnDeadline.map { ("Return", $0) },
-            warrantyExpiration.map { ("Warranty", $0) }
+            (!isReturnHandled ? returnDeadline.map { ("Return", $0) } : nil),
+            confirmedWarrantyExpiration.map { ("Warranty", $0) }
         ]
         .compactMap { $0 }
         .sorted { $0.date < $1.date }
@@ -63,6 +103,18 @@ extension PurchaseRecord {
     }
 
     var statusLine: String {
+        if wrappedSourceType == "Email", gmailLifecycleStage != .unknown {
+            let stageLabel = gmailLifecycleStage.statusLineTitle
+            if let syncedAt = lastSyncedAt {
+                let formatter = RelativeDateTimeFormatter()
+                formatter.unitsStyle = .full
+                let relativeText = formatter.localizedString(for: syncedAt, relativeTo: .now)
+                return "\(stageLabel) \(relativeText)"
+            }
+
+            return stageLabel
+        }
+
         guard let nextDeadline else {
             return "Receipt saved"
         }

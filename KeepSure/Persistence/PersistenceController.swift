@@ -91,14 +91,18 @@ final class PersistenceController {
             purchase.purchaseDate = purchaseDate
             purchase.returnDeadline = windows.returnDeadline
             purchase.warrantyExpiration = windows.warrantyExpiration
+            purchase.warrantyStatusRaw = WarrantyStatus.confirmed.rawValue
             purchase.sourceType = item.1 == "Target" ? "Email" : "Scan"
             purchase.currencyCode = "USD"
             purchase.notes = "Seeded sample purchase for the first dashboard experience."
             purchase.createdAt = purchaseDate
             purchase.isArchived = false
+            purchase.returnCompleted = false
             purchase.externalProvider = item.1 == "Target" ? "demo" : nil
             purchase.externalRecordID = item.1 == "Target" ? UUID().uuidString : nil
             purchase.lastSyncedAt = item.1 == "Target" ? .now : nil
+            purchase.gmailOrderNumber = item.1 == "Target" ? "DEMO-\(UUID().uuidString.prefix(8))" : nil
+            purchase.gmailLifecycleStageRaw = item.1 == "Target" ? GmailOrderStage.delivered.rawValue : nil
         }
 
         if context.hasChanges {
@@ -124,12 +128,16 @@ final class PersistenceController {
             attribute(name: "purchaseDate", type: .dateAttributeType),
             attribute(name: "returnDeadline", type: .dateAttributeType, optional: true),
             attribute(name: "warrantyExpiration", type: .dateAttributeType, optional: true),
+            attribute(name: "warrantyStatusRaw", type: .stringAttributeType, optional: true),
             attribute(name: "createdAt", type: .dateAttributeType),
             attribute(name: "price", type: .doubleAttributeType, optional: false),
             attribute(name: "isArchived", type: .booleanAttributeType, optional: false),
+            attribute(name: "returnCompleted", type: .booleanAttributeType, optional: false, defaultValue: false),
             attribute(name: "externalProvider", type: .stringAttributeType, optional: true),
             attribute(name: "externalRecordID", type: .stringAttributeType, optional: true),
-            attribute(name: "lastSyncedAt", type: .dateAttributeType, optional: true)
+            attribute(name: "lastSyncedAt", type: .dateAttributeType, optional: true),
+            attribute(name: "gmailOrderNumber", type: .stringAttributeType, optional: true),
+            attribute(name: "gmailLifecycleStageRaw", type: .stringAttributeType, optional: true)
         ]
 
         model.entities = [entity]
@@ -139,12 +147,14 @@ final class PersistenceController {
     private static func attribute(
         name: String,
         type: NSAttributeType,
-        optional: Bool = false
+        optional: Bool = false,
+        defaultValue: Any? = nil
     ) -> NSAttributeDescription {
         let attribute = NSAttributeDescription()
         attribute.name = name
         attribute.attributeType = type
         attribute.isOptional = optional
+        attribute.defaultValue = defaultValue
         return attribute
     }
 }
